@@ -85,6 +85,13 @@ export const TokenArgsSchema = GlobalOptionsSchema.extend({
 });
 
 /**
+ * Status command arguments
+ */
+export const StatusArgsSchema = GlobalOptionsSchema.extend({
+  checkPr: z.boolean().default(false),
+});
+
+/**
  * Inferred types from schemas
  */
 export type GlobalOptions = z.infer<typeof GlobalOptionsSchema>;
@@ -96,6 +103,7 @@ export type SquashArgs = z.infer<typeof SquashArgsSchema>;
 export type RebaseArgs = z.infer<typeof RebaseArgsSchema>;
 export type TokenSubcommand = z.infer<typeof TokenSubcommandSchema>;
 export type TokenArgs = z.infer<typeof TokenArgsSchema>;
+export type StatusArgs = z.infer<typeof StatusArgsSchema>;
 
 /**
  * Validate init command arguments
@@ -137,4 +145,11 @@ export const validateRebaseArgs = (args: unknown): RebaseArgs => {
  */
 export const validateTokenArgs = (args: unknown): TokenArgs => {
   return TokenArgsSchema.parse(args);
+};
+
+/**
+ * Validate status command arguments
+ */
+export const validateStatusArgs = (args: unknown): StatusArgs => {
+  return StatusArgsSchema.parse(args);
 };

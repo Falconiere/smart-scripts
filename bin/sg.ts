@@ -19,6 +19,7 @@ import pushCommand from "@/cli/commands/push.ts";
 import squashCommand from "@/cli/commands/squash.ts";
 import rebaseCommand from "@/cli/commands/rebase.ts";
 import tokenCommand from "@/cli/commands/token.ts";
+import statusCommand from "@/cli/commands/status.ts";
 
 // Load config before running commands
 await loadConfig();
@@ -43,6 +44,7 @@ await yargs(hideBin(process.argv))
   .version(`${VERSION} (${VERSION_DATE})`)
   .usage("$0 <command> [options]")
   .command(initCommand)
+  .command(statusCommand)
   .command(commitCommand)
   .command(pushCommand)
   .command(squashCommand)
