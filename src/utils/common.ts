@@ -352,8 +352,57 @@ export const git = {
   },
 
   /**
+   * Update local base branch to match remote without switching branches
+   * Only performs fast-forward updates (safe operation)
+   */
+  async updateLocalBaseBranch(baseBranch: string): Promise<{ updated: boolean; message: string }> {
+    const currentBranch = await this.getCurrentBranch();
+
+    // Don't try to update if we're on the base branch
+    if (currentBranch === baseBranch) {
+      return { updated: false, message: "On base branch, skipping local update" };
+    }
+
+    // Check if local base branch exists
+    try {
+      await runCommand(["git", "rev-parse", "--verify", baseBranch], { silent: true });
+    } catch {
+      return { updated: false, message: "Local base branch doesn't exist" };
+    }
+
+    try {
+      const { stdout: behindCount } = await runCommand(
+        ["git", "rev-list", "--count", `${baseBranch}..origin/${baseBranch}`],
+        { silent: true }
+      );
+
+      const { stdout: aheadCount } = await runCommand(
+        ["git", "rev-list", "--count", `origin/${baseBranch}..${baseBranch}`],
+        { silent: true }
+      );
+
+      const behind = Number.parseInt(behindCount.trim(), 10);
+      const ahead = Number.parseInt(aheadCount.trim(), 10);
+
+      if (behind > 0 && ahead === 0) {
+        // Local base branch is behind remote and has no local commits - safe to fast-forward
+        await runCommand(["git", "fetch", "origin", `${baseBranch}:${baseBranch}`], { silent: true });
+        return { updated: true, message: `Local ${baseBranch} updated (${behind} commit(s))` };
+      } else if (behind > 0 && ahead > 0) {
+        // Local base branch has diverged - warn but don't update
+        return { updated: false, message: `Local ${baseBranch} has ${ahead} unpushed commit(s), skipping update` };
+      }
+
+      return { updated: false, message: `Local ${baseBranch} already up to date` };
+    } catch {
+      return { updated: false, message: `Could not update local ${baseBranch}` };
+    }
+  },
+
+  /**
    * Sync with base branch using specified strategy
    * Automatically stashes and restores local changes
+   * Also updates local base branch if possible (fast-forward only)
    * Returns true if sync was successful, false if there were conflicts
    */
   async syncWithBase(
@@ -376,6 +425,14 @@ export const git = {
     try {
       // Fetch latest
       await this.fetch();
+
+      // Update local base branch if possible (fast-forward only)
+      const localUpdateResult = await this.updateLocalBaseBranch(baseBranch);
+      if (localUpdateResult.updated) {
+        logger.info(`📥 ${localUpdateResult.message}`);
+      } else if (localUpdateResult.message.includes("unpushed")) {
+        logger.warn(localUpdateResult.message);
+      }
 
       if (strategy === "rebase") {
         await runCommand(["git", "rebase", `origin/${baseBranch}`], { silent: true });
