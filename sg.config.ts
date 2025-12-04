@@ -8,6 +8,7 @@ export default {
   git: {
     baseBranch: "main",
     forceWithLease: true,
+    lintStagedCmd: "npx oxlint",
   },
   ai: {
     model: "anthropic/claude-haiku-4.5",

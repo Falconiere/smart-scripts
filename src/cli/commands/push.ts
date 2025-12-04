@@ -30,8 +30,6 @@ interface PushCommandArgs {
   noColor?: boolean;
 }
 
-const lintableFileRegex = /\.(js|ts|cjs|mjs|jsx|tsx|json|jsonc)$/;
-
 const checkUpstreamStatus = async (currentBranch: string): Promise<boolean> => {
   const upstream = await git.getUpstreamBranch();
 
@@ -59,29 +57,41 @@ const isWorkingTreeClean = async (): Promise<boolean> => {
 };
 
 const runLintOnStagedFiles = async (): Promise<void> => {
-  console.log(`\n${COLORS.cyan}Running biome check on staged files...${COLORS.reset}`);
+  const config = getConfig();
+  const lintCmd = config.git.lintStagedCmd;
+
+  // Skip linting if disabled or not a valid command string
+  if (!lintCmd || typeof lintCmd !== "string") {
+    return;
+  }
+
+  console.log(`\n${COLORS.cyan}Running lint on staged files...${COLORS.reset}`);
   try {
     const { stdout: stagedFiles } = await runCommand(
       ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
       { silent: true }
     );
 
-    const filesToCheck = stagedFiles
-      .split("\n")
-      .filter((f) => lintableFileRegex.test(f))
-      .filter(Boolean);
+    const filesToCheck = stagedFiles.split("\n").filter(Boolean);
 
     if (filesToCheck.length > 0) {
-      await runCommand(["npx", "biome", "check", "--write", "--unsafe", "--no-errors-on-unmatched", ...filesToCheck], {
+      // Run the configured lint command
+      // The command can use $FILES placeholder for file list
+      const cmdWithFiles = lintCmd.includes("$FILES")
+        ? lintCmd.replace("$FILES", filesToCheck.join(" "))
+        : `${lintCmd} ${filesToCheck.join(" ")}`;
+
+      await runCommand(["sh", "-c", cmdWithFiles], {
         silent: false,
         ignoreExitCode: true,
       });
 
+      // Re-stage files that may have been modified by the linter
       for (const file of filesToCheck) {
         await runCommand(["git", "add", file], { silent: true });
       }
 
-      console.log(`${COLORS.green}✓${COLORS.reset} Lint issues fixed`);
+      console.log(`${COLORS.green}✓${COLORS.reset} Lint completed`);
     }
   } catch {
     console.log(`${COLORS.yellow}Lint check had issues, continuing with commit${COLORS.reset}`);
@@ -206,8 +216,9 @@ const pushCommand: CommandModule<object, PushCommandArgs> = {
         process.exit(1);
       }
 
-      if (isDryRun()) {
-        output.dryRunAction("Run biome check on staged files and auto-fix");
+      const appConfig = getConfig();
+      if (isDryRun() && appConfig.git.lintStagedCmd) {
+        output.dryRunAction("Run lint on staged files", `cmd: ${appConfig.git.lintStagedCmd}`);
       } else {
         await runLintOnStagedFiles();
       }

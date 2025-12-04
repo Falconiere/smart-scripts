@@ -20,6 +20,19 @@ interface DetectedTemplates {
   prTemplate: string | null;
 }
 
+interface DetectedDevTool {
+  name: string;
+  configFile: string;
+  command: string;
+  hint: string;
+}
+
+interface DetectedDevTools {
+  linters: DetectedDevTool[];
+  typecheckers: DetectedDevTool[];
+  lintStaged: DetectedDevTool | null;
+}
+
 /**
  * Detect existing templates in the project
  */
@@ -75,6 +88,139 @@ const detectTemplates = (): DetectedTemplates => {
 };
 
 /**
+ * Detect linting, formatting, and typecheck tools in the project
+ */
+const detectDevTools = (): DetectedDevTools => {
+  const root = getProjectRoot();
+  const result: DetectedDevTools = {
+    linters: [],
+    typecheckers: [],
+    lintStaged: null,
+  };
+
+  // Try to read package.json for scripts
+  let packageJson: { scripts?: Record<string, string>; devDependencies?: Record<string, string>; dependencies?: Record<string, string> } = {};
+  const packagePath = join(root, "package.json");
+  if (existsSync(packagePath)) {
+    try {
+      packageJson = JSON.parse(readFileSync(packagePath, "utf-8"));
+    } catch {
+      // Ignore parse errors
+    }
+  }
+
+  const deps = { ...packageJson.dependencies, ...packageJson.devDependencies };
+  const scripts = packageJson.scripts ?? {};
+
+  // Detect Biome
+  const biomeConfigs = ["biome.json", "biome.jsonc"];
+  for (const config of biomeConfigs) {
+    if (existsSync(join(root, config)) || deps["@biomejs/biome"]) {
+      result.linters.push({
+        name: "Biome",
+        configFile: config,
+        command: "npx biome check --write",
+        hint: "fast linter & formatter",
+      });
+      break;
+    }
+  }
+
+  // Detect ESLint
+  const eslintConfigs = ["eslint.config.js", "eslint.config.mjs", "eslint.config.cjs", ".eslintrc.js", ".eslintrc.json", ".eslintrc.yml", ".eslintrc.yaml", ".eslintrc"];
+  for (const config of eslintConfigs) {
+    if (existsSync(join(root, config)) || deps.eslint) {
+      result.linters.push({
+        name: "ESLint",
+        configFile: config,
+        command: "npx eslint --fix",
+        hint: "popular JavaScript linter",
+      });
+      break;
+    }
+  }
+
+  // Detect OxLint
+  if (existsSync(join(root, "oxlintrc.json")) || deps.oxlint) {
+    result.linters.push({
+      name: "OxLint",
+      configFile: "oxlintrc.json",
+      command: "npx oxlint",
+      hint: "fast Rust-based linter",
+    });
+  }
+
+  // Detect Prettier
+  const prettierConfigs = ["prettier.config.js", "prettier.config.mjs", "prettier.config.cjs", ".prettierrc", ".prettierrc.js", ".prettierrc.json", ".prettierrc.yml", ".prettierrc.yaml"];
+  for (const config of prettierConfigs) {
+    if (existsSync(join(root, config)) || deps.prettier) {
+      result.linters.push({
+        name: "Prettier",
+        configFile: config,
+        command: "npx prettier --write",
+        hint: "code formatter",
+      });
+      break;
+    }
+  }
+
+  // Detect TypeScript
+  if (existsSync(join(root, "tsconfig.json")) || deps.typescript) {
+    result.typecheckers.push({
+      name: "TypeScript",
+      configFile: "tsconfig.json",
+      command: "npx tsc --noEmit",
+      hint: "type checking",
+    });
+  }
+
+  // Detect lint-staged
+  const lintStagedConfigs = ["lint-staged.config.js", "lint-staged.config.mjs", "lint-staged.config.cjs", ".lintstagedrc", ".lintstagedrc.js", ".lintstagedrc.json", ".lintstagedrc.yml", ".lintstagedrc.yaml"];
+  for (const config of lintStagedConfigs) {
+    if (existsSync(join(root, config)) || deps["lint-staged"]) {
+      result.lintStaged = {
+        name: "lint-staged",
+        configFile: config,
+        command: "npx lint-staged",
+        hint: "runs linters on staged files",
+      };
+      break;
+    }
+  }
+
+  // Check for lint-staged in package.json
+  if (!result.lintStaged && packageJson && "lint-staged" in packageJson) {
+    result.lintStaged = {
+      name: "lint-staged",
+      configFile: "package.json",
+      command: "npx lint-staged",
+      hint: "runs linters on staged files",
+    };
+  }
+
+  // Also check for common npm scripts
+  if (scripts.lint && !result.linters.some((l) => l.name === "npm script")) {
+    result.linters.push({
+      name: "npm run lint",
+      configFile: "package.json",
+      command: "npm run lint",
+      hint: "project's lint script",
+    });
+  }
+
+  if (scripts.typecheck && !result.typecheckers.some((t) => t.name === "npm script")) {
+    result.typecheckers.push({
+      name: "npm run typecheck",
+      configFile: "package.json",
+      command: "npm run typecheck",
+      hint: "project's typecheck script",
+    });
+  }
+
+  return result;
+};
+
+/**
  * Try to detect ticket ID pattern from PR template content
  */
 const detectTicketPattern = (prTemplatePath: string): string | null => {
@@ -120,6 +266,8 @@ interface ConfigOptions {
   forceWithLease: boolean;
   colors: boolean;
   cacheEnabled: boolean;
+  // Git options
+  lintStagedCmd?: string | false;
   // Commit options
   useSemanticYaml?: boolean;
   useCommitTemplate?: string;
@@ -162,6 +310,11 @@ ${parts.join("\n")}
     ? "\n  // Note: semantic.yml is auto-detected and loaded automatically"
     : "";
 
+  // Build git section with optional lintStagedCmd
+  const lintLine = options.lintStagedCmd
+    ? `\n    lintStagedCmd: "${options.lintStagedCmd}",`
+    : "";
+
   return `/**
  * sg CLI configuration
  * https://github.com/falconiere/smart-scripts
@@ -171,7 +324,7 @@ import type { SgConfig } from "smart-scripts";
 export default {
   git: {
     baseBranch: "${options.baseBranch}",
-    forceWithLease: ${options.forceWithLease},
+    forceWithLease: ${options.forceWithLease},${lintLine}
   },
   ai: {
     model: "${options.model}",
@@ -401,6 +554,94 @@ const initCommand: CommandModule<object, InitCommandArgs> = {
       process.exit(0);
     }
 
+    // Detect dev tools (only for project config, not global)
+    let lintStagedCmd: string | false | undefined;
+
+    if (!isGlobal) {
+      const devTools = detectDevTools();
+      const hasDevTools = devTools.linters.length > 0 || devTools.typecheckers.length > 0 || devTools.lintStaged;
+
+      if (hasDevTools) {
+        p.log.info("Detected development tools in your project:");
+
+        const toolsList: string[] = [];
+        for (const tool of devTools.linters) {
+          toolsList.push(`  ${color.green("✓")} ${color.cyan(tool.name)} - ${tool.hint}`);
+        }
+        for (const tool of devTools.typecheckers) {
+          toolsList.push(`  ${color.green("✓")} ${color.cyan(tool.name)} - ${tool.hint}`);
+        }
+        if (devTools.lintStaged) {
+          toolsList.push(`  ${color.green("✓")} ${color.cyan(devTools.lintStaged.name)} - ${devTools.lintStaged.hint}`);
+        }
+
+        p.note(toolsList.join("\n"), "Detected Dev Tools");
+
+        // Build options for lint command selection
+        const lintOptions: { value: string | false; label: string; hint?: string }[] = [
+          { value: false, label: "None", hint: "don't run any linting" },
+        ];
+
+        // Prioritize lint-staged if available
+        if (devTools.lintStaged) {
+          lintOptions.unshift({
+            value: devTools.lintStaged.command,
+            label: devTools.lintStaged.name,
+            hint: `${devTools.lintStaged.hint} (recommended)`,
+          });
+        }
+
+        // Add individual linters
+        for (const tool of devTools.linters) {
+          lintOptions.push({
+            value: tool.command,
+            label: tool.name,
+            hint: tool.hint,
+          });
+        }
+
+        // Add custom option
+        lintOptions.push({
+          value: "__custom__",
+          label: "Custom command...",
+          hint: "enter your own lint command",
+        });
+
+        const lintChoice = await p.select({
+          message: "Run a lint/format command before commits?",
+          initialValue: devTools.lintStaged?.command ?? false,
+          options: lintOptions,
+        });
+
+        if (p.isCancel(lintChoice)) {
+          p.cancel("Setup cancelled.");
+          process.exit(0);
+        }
+
+        if (lintChoice === "__custom__") {
+          const customCmd = await p.text({
+            message: "Enter your lint command:",
+            placeholder: "e.g., npm run lint, npx eslint --fix",
+            validate: (value) => {
+              if (!value.trim()) return "Command is required";
+            },
+          });
+
+          if (p.isCancel(customCmd)) {
+            p.cancel("Setup cancelled.");
+            process.exit(0);
+          }
+          lintStagedCmd = customCmd as string;
+        } else {
+          lintStagedCmd = lintChoice as string | false;
+        }
+
+        if (lintStagedCmd) {
+          p.log.success(`Will run: ${color.cyan(lintStagedCmd)} before commits`);
+        }
+      }
+    }
+
     // Detect existing templates (only for project config, not global)
     let useSemanticYaml = false;
     let useCommitTemplate: string | undefined;
@@ -545,6 +786,7 @@ const initCommand: CommandModule<object, InitCommandArgs> = {
       model: model as string,
       cacheEnabled: cacheEnabled as boolean,
       colors: colors as boolean,
+      lintStagedCmd: lintStagedCmd ?? false,
       useSemanticYaml,
       useCommitTemplate,
       ticketId: ticketIdConfig,
@@ -571,6 +813,11 @@ ${color.dim("Force w/Lease:")}  ${config.forceWithLease ? "Yes" : "No"}
 ${color.dim("AI Model:")}       ${config.model}
 ${color.dim("Caching:")}        ${config.cacheEnabled ? "Enabled" : "Disabled"}
 ${color.dim("Colors:")}         ${config.colors ? "Enabled" : "Disabled"}`;
+
+    // Add lint command to summary
+    if (config.lintStagedCmd) {
+      summary += `\n${color.dim("Lint Command:")}   ${config.lintStagedCmd}`;
+    }
 
     // Add commit config to summary
     if (config.useSemanticYaml) {

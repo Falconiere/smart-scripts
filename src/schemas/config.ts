@@ -18,6 +18,8 @@ export const GitConfigSchema = z.object({
   requireJiraId: z.boolean().default(true),
   autoSquash: z.boolean().default(false),
   forceWithLease: z.boolean().default(true),
+  /** Lint command to run on staged files before commit (set to false to disable) */
+  lintStagedCmd: z.union([z.string(), z.boolean()]).default(false),
 });
 
 /**
@@ -245,6 +247,7 @@ export const DEFAULT_CONFIG: SgConfig = {
     requireJiraId: false,
     autoSquash: false,
     forceWithLease: true,
+    lintStagedCmd: false,
   },
   ai: {
     provider: "openrouter",
