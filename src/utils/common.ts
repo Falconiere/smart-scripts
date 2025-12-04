@@ -302,7 +302,7 @@ export const git = {
       try {
         await runCommand(["git", "stash", "pop", "--index"], { silent: true });
         return { success: true, message: "Changes restored from stash" };
-      } catch (indexError) {
+      } catch {
         // If --index fails (e.g., stash doesn't have staged changes), try without --index
         // and manually restore staging state
         await runCommand(["git", "stash", "pop"], { silent: true });

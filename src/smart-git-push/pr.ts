@@ -249,7 +249,7 @@ Generate the PR title and description following the template format. The title s
     const title = await generatePRTitle(branch, commits);
 
     return { title, body };
-  } catch (e) {
+  } catch {
     logger.warn("Failed to generate AI description, using default template");
 
     const title = await generatePRTitle(branch, commits);
@@ -315,7 +315,7 @@ export const ensurePR = async (
   baseBranch: string,
   model: string,
   isDraft: boolean,
-  autoYes: boolean
+  _autoYes: boolean
 ): Promise<void> => {
   // Don't create PR for main branch
   if (currentBranch === baseBranch || currentBranch === "main" || currentBranch === "master") {

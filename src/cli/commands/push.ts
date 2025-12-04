@@ -66,35 +66,37 @@ const runLintOnStagedFiles = async (): Promise<void> => {
   }
 
   console.log(`\n${COLORS.cyan}Running lint on staged files...${COLORS.reset}`);
-  try {
-    const { stdout: stagedFiles } = await runCommand(
-      ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
-      { silent: true }
-    );
 
-    const filesToCheck = stagedFiles.split("\n").filter(Boolean);
+  const { stdout: stagedFiles } = await runCommand(
+    ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+    { silent: true }
+  );
 
-    if (filesToCheck.length > 0) {
-      // Run the configured lint command
-      // The command can use $FILES placeholder for file list
-      const cmdWithFiles = lintCmd.includes("$FILES")
-        ? lintCmd.replace("$FILES", filesToCheck.join(" "))
-        : `${lintCmd} ${filesToCheck.join(" ")}`;
+  const filesToCheck = stagedFiles.split("\n").filter(Boolean);
 
-      await runCommand(["sh", "-c", cmdWithFiles], {
-        silent: false,
-        ignoreExitCode: true,
-      });
+  if (filesToCheck.length > 0) {
+    // Run the configured lint command
+    // The command can use $FILES placeholder for file list
+    const cmdWithFiles = lintCmd.includes("$FILES")
+      ? lintCmd.replace("$FILES", filesToCheck.join(" "))
+      : `${lintCmd} ${filesToCheck.join(" ")}`;
 
-      // Re-stage files that may have been modified by the linter
-      for (const file of filesToCheck) {
-        await runCommand(["git", "add", file], { silent: true });
-      }
+    const { exitCode } = await runCommand(["sh", "-c", cmdWithFiles], {
+      silent: false,
+      ignoreExitCode: true,
+    });
 
-      console.log(`${COLORS.green}✓${COLORS.reset} Lint completed`);
+    if (exitCode !== 0) {
+      logger.error("Lint check failed. Please fix the issues before committing.");
+      process.exit(1);
     }
-  } catch {
-    console.log(`${COLORS.yellow}Lint check had issues, continuing with commit${COLORS.reset}`);
+
+    // Re-stage files that may have been modified by the linter
+    for (const file of filesToCheck) {
+      await runCommand(["git", "add", file], { silent: true });
+    }
+
+    console.log(`${COLORS.green}✓${COLORS.reset} Lint completed`);
   }
 };
 

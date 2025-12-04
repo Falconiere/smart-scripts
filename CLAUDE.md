@@ -53,7 +53,10 @@ bun run typecheck
 # Lint (OxLint)
 bun run lint
 
-# Run all checks
+# Lint with auto-fix
+bun run lint:fix
+
+# Run all checks (typecheck + lint)
 bun run check
 ```
 
@@ -104,6 +107,7 @@ smart-scripts/
 
 - `common.ts` - Colors, logging, user interaction, git operations, command execution
 - `openrouter.ts` - OpenRouter API client with model tiers (MAX/MEDIUM/SMALL) and caching
+- `openrouter-pricing.ts` - Real-time model pricing from OpenRouter API with 24-hour caching
 - `config.ts` - Configuration loading (global + per-project) with Zod validation
 - `output.ts` - Output formatting, dry-run support, JSON output
 
@@ -304,6 +308,11 @@ import type { SgConfig } from "smart-scripts";
 export default {
   git: {
     baseBranch: "main",
+    autoSquash: false,            // Auto-squash commits before push
+    forceWithLease: true,         // Use --force-with-lease for safety
+    lintStagedCmd: "bun run lint", // Lint command to run on staged files (or false to disable)
+    syncStrategy: "rebase",       // "rebase" | "merge" | "none" - how to sync with base branch
+    autoSync: true,               // Auto-sync with base branch before push
   },
   ai: {
     model: "anthropic/claude-haiku-4.5",
@@ -314,8 +323,39 @@ export default {
       small: "anthropic/claude-haiku-4",
     },
   },
+  // Optional: customize commit message generation
+  commit: {
+    types: [
+      { type: "feat", description: "New feature" },
+      { type: "fix", description: "Bug fix" },
+      { type: "docs", description: "Documentation" },
+      { type: "refactor", description: "Code refactoring" },
+    ],
+    scopes: ["cli", "api", "config"],  // Allowed scopes
+    requireScope: false,
+    ticketId: {
+      enabled: true,
+      pattern: "[A-Z]+-\\d+",          // Regex for ticket ID format
+      required: false,
+    },
+    maxSubjectLength: 72,
+    maxBodyLength: 500,
+    requireBody: false,
+  },
 } satisfies Partial<SgConfig>;
 ```
+
+## Documentation Sync
+
+When making changes to the codebase, always verify that CLAUDE.md remains accurate:
+
+- **New utilities**: Add to the Shared Utilities section
+- **New CLI commands**: Add to the CLI Commands table
+- **New config options**: Update the example `sg.config.ts`
+- **New environment variables**: Add to the Environment Variables section
+- **Schema changes**: Update relevant configuration examples
+
+Before completing a task, ask: "Does this change require a documentation update?"
 
 ## Code Quality
 
