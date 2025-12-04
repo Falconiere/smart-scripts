@@ -190,6 +190,26 @@ const pushCommand: CommandModule<object, PushCommandArgs> = {
       process.exit(1);
     }
 
+    // Auto-sync with base branch if configured
+    const appConfig = getConfig();
+    if (appConfig.git.autoSync && appConfig.git.syncStrategy !== "none") {
+      const { baseBranch, syncStrategy } = appConfig.git;
+
+      if (isDryRun()) {
+        output.dryRunAction(`Sync with ${baseBranch}`, `strategy: ${syncStrategy}`);
+      } else {
+        output.info(`Syncing with ${baseBranch} (${syncStrategy})...`);
+        const result = await git.syncWithBase(baseBranch, syncStrategy);
+
+        if (result.success) {
+          logger.success(result.message);
+        } else {
+          logger.error(result.message);
+          process.exit(1);
+        }
+      }
+    }
+
     const currentBranch = await git.getCurrentBranch();
     console.log(`${COLORS.blue}Current branch: ${COLORS.yellow}${currentBranch}${COLORS.reset}`);
 
@@ -216,7 +236,6 @@ const pushCommand: CommandModule<object, PushCommandArgs> = {
         process.exit(1);
       }
 
-      const appConfig = getConfig();
       if (isDryRun() && appConfig.git.lintStagedCmd) {
         output.dryRunAction("Run lint on staged files", `cmd: ${appConfig.git.lintStagedCmd}`);
       } else {
@@ -263,7 +282,6 @@ const pushCommand: CommandModule<object, PushCommandArgs> = {
         await performPush(currentBranch, false, setUpstream, config.autoYes);
 
         if (!config.skipPR) {
-          const appConfig = getConfig();
           await ensurePR(currentBranch, mainBranch, appConfig.ai.model, config.prDraft, config.autoYes);
         }
       } catch (error_) {
