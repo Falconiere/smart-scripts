@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { resolveConflictsInteractively, hasUnresolvedConflicts } from "./conflict-resolver.ts";
 
 // --- Colors & Logging ---
 
@@ -352,14 +353,142 @@ export const git = {
   },
 
   /**
+   * Update local base branch to match remote without switching branches
+   * Only performs fast-forward updates (safe operation)
+   */
+  async updateLocalBaseBranch(baseBranch: string): Promise<{ updated: boolean; message: string }> {
+    const currentBranch = await this.getCurrentBranch();
+
+    // Don't try to update if we're on the base branch
+    if (currentBranch === baseBranch) {
+      return { updated: false, message: "On base branch, skipping local update" };
+    }
+
+    // Check if local base branch exists
+    try {
+      await runCommand(["git", "rev-parse", "--verify", baseBranch], { silent: true });
+    } catch {
+      return { updated: false, message: "Local base branch doesn't exist" };
+    }
+
+    try {
+      const { stdout: behindCount } = await runCommand(
+        ["git", "rev-list", "--count", `${baseBranch}..origin/${baseBranch}`],
+        { silent: true }
+      );
+
+      const { stdout: aheadCount } = await runCommand(
+        ["git", "rev-list", "--count", `origin/${baseBranch}..${baseBranch}`],
+        { silent: true }
+      );
+
+      const behind = Number.parseInt(behindCount.trim(), 10);
+      const ahead = Number.parseInt(aheadCount.trim(), 10);
+
+      if (behind > 0 && ahead === 0) {
+        // Local base branch is behind remote and has no local commits - safe to fast-forward
+        await runCommand(["git", "fetch", "origin", `${baseBranch}:${baseBranch}`], { silent: true });
+        return { updated: true, message: `Local ${baseBranch} updated (${behind} commit(s))` };
+      } else if (behind > 0 && ahead > 0) {
+        // Local base branch has diverged - warn but don't update
+        return { updated: false, message: `Local ${baseBranch} has ${ahead} unpushed commit(s), skipping update` };
+      }
+
+      return { updated: false, message: `Local ${baseBranch} already up to date` };
+    } catch {
+      return { updated: false, message: `Could not update local ${baseBranch}` };
+    }
+  },
+
+  /**
+   * Get list of conflicted files
+   */
+  async getConflictedFiles(): Promise<string[]> {
+    try {
+      const { stdout } = await runCommand(["git", "diff", "--name-only", "--diff-filter=U"], { silent: true });
+      return stdout.split("\n").filter(Boolean);
+    } catch {
+      return [];
+    }
+  },
+
+  /**
+   * Check if currently in the middle of a rebase
+   */
+  async isRebaseInProgress(): Promise<boolean> {
+    try {
+      const { stdout } = await runCommand(["git", "rev-parse", "--git-dir"], { silent: true });
+      const gitDir = stdout.trim();
+      const { exitCode } = await runCommand(["test", "-d", `${gitDir}/rebase-merge`], {
+        silent: true,
+        ignoreExitCode: true,
+      });
+      if (exitCode === 0) return true;
+      const { exitCode: exitCode2 } = await runCommand(["test", "-d", `${gitDir}/rebase-apply`], {
+        silent: true,
+        ignoreExitCode: true,
+      });
+      return exitCode2 === 0;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Check if currently in the middle of a merge
+   */
+  async isMergeInProgress(): Promise<boolean> {
+    try {
+      const { stdout } = await runCommand(["git", "rev-parse", "--git-dir"], { silent: true });
+      const gitDir = stdout.trim();
+      const { exitCode } = await runCommand(["test", "-f", `${gitDir}/MERGE_HEAD`], {
+        silent: true,
+        ignoreExitCode: true,
+      });
+      return exitCode === 0;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Show conflict resolution help
+   */
+  showConflictHelp(strategy: "rebase" | "merge", _baseBranch: string): void {
+    console.log(`\n${COLORS.red}❌ ${strategy === "rebase" ? "Rebase" : "Merge"} failed with conflicts${COLORS.reset}`);
+    console.log(`\n${COLORS.cyan}To resolve conflicts:${COLORS.reset}`);
+    console.log(`  1. ${COLORS.blue}Edit the conflicted files to resolve conflicts${COLORS.reset}`);
+    console.log(`  2. ${COLORS.blue}Stage resolved files: ${COLORS.yellow}git add <files>${COLORS.reset}`);
+    if (strategy === "rebase") {
+      console.log(`  3. ${COLORS.blue}Continue rebase: ${COLORS.yellow}git rebase --continue${COLORS.reset}`);
+      console.log(`  4. ${COLORS.blue}Then push: ${COLORS.yellow}sg push${COLORS.reset}`);
+    } else {
+      console.log(`  3. ${COLORS.blue}Commit merge: ${COLORS.yellow}git commit${COLORS.reset}`);
+      console.log(`  4. ${COLORS.blue}Then push: ${COLORS.yellow}sg push${COLORS.reset}`);
+    }
+    console.log("");
+    console.log(`${COLORS.cyan}Or abort and try again later:${COLORS.reset}`);
+    console.log(`  ${COLORS.yellow}git ${strategy} --abort${COLORS.reset}`);
+    console.log("");
+    console.log(`${COLORS.cyan}Tips:${COLORS.reset}`);
+    console.log(`  - Use ${COLORS.yellow}git status${COLORS.reset} to see which files have conflicts`);
+    console.log(
+      `  - Look for ${COLORS.yellow}<<<<<<<${COLORS.reset}, ${COLORS.yellow}=======${COLORS.reset}, and ${COLORS.yellow}>>>>>>>${COLORS.reset} markers in files`
+    );
+  },
+
+  /**
    * Sync with base branch using specified strategy
    * Automatically stashes and restores local changes
-   * Returns true if sync was successful, false if there were conflicts
+   * Also updates local base branch if possible (fast-forward only)
+   * @param interactive - If true, shows conflict help and doesn't auto-abort on conflicts
    */
   async syncWithBase(
     baseBranch: string,
-    strategy: "rebase" | "merge"
-  ): Promise<{ success: boolean; message: string }> {
+    strategy: "rebase" | "merge",
+    options: { interactive?: boolean } = {}
+  ): Promise<{ success: boolean; message: string; hasConflicts?: boolean }> {
+    const { interactive = true } = options;
     const currentBranch = await this.getCurrentBranch();
 
     // Don't sync if we're on the base branch
@@ -376,6 +505,14 @@ export const git = {
     try {
       // Fetch latest
       await this.fetch();
+
+      // Update local base branch if possible (fast-forward only)
+      const localUpdateResult = await this.updateLocalBaseBranch(baseBranch);
+      if (localUpdateResult.updated) {
+        logger.info(`📥 ${localUpdateResult.message}`);
+      } else if (localUpdateResult.message.includes("unpushed")) {
+        logger.warn(localUpdateResult.message);
+      }
 
       if (strategy === "rebase") {
         await runCommand(["git", "rebase", `origin/${baseBranch}`], { silent: true });
@@ -405,23 +542,162 @@ export const git = {
       const hasConflicts = status.includes("UU") || status.includes("AA") || status.includes("DD");
 
       if (hasConflicts) {
-        // Abort the failed operation
-        if (strategy === "rebase") {
-          await runCommand(["git", "rebase", "--abort"], { silent: true, ignoreExitCode: true });
+        if (interactive) {
+          // Show conflicted files
+          const conflictedFiles = await this.getConflictedFiles();
+          if (conflictedFiles.length > 0) {
+            console.log(`\n${COLORS.yellow}📋 Conflicted files (${conflictedFiles.length}):${COLORS.reset}`);
+            for (const file of conflictedFiles) {
+              console.log(`  ${COLORS.red}✖${COLORS.reset} ${file}`);
+            }
+          }
+
+          // Ask user what to do
+          console.log("");
+          console.log(`${COLORS.cyan}Options:${COLORS.reset}`);
+          console.log(`  ${COLORS.green}[r]${COLORS.reset} Resolve conflicts interactively`);
+          console.log(`  ${COLORS.yellow}[a]${COLORS.reset} Abort and restore your changes`);
+          console.log(`  ${COLORS.dim}[m]${COLORS.reset} Exit to resolve manually`);
+          console.log("");
+
+          const rl = createInterface({ input: process.stdin, output: process.stdout });
+          const choice = await new Promise<string>((resolve) => {
+            rl.question(`${COLORS.cyan}Your choice [r/a/m]: ${COLORS.reset}`, (answer) => {
+              rl.close();
+              resolve(answer.trim().toLowerCase());
+            });
+          });
+
+          if (choice === "a" || choice === "abort") {
+            // Abort the operation
+            if (strategy === "rebase") {
+              await runCommand(["git", "rebase", "--abort"], { silent: true, ignoreExitCode: true });
+            } else {
+              await runCommand(["git", "merge", "--abort"], { silent: true, ignoreExitCode: true });
+            }
+
+            // Restore stashed changes
+            if (stashResult.stashed) {
+              await this.stashPop(stashResult.stagedFiles);
+              logger.info("Restored local changes");
+            }
+
+            return {
+              success: false,
+              hasConflicts: true,
+              message: `${strategy === "rebase" ? "Rebase" : "Merge"} aborted. Your changes have been restored.`,
+            };
+          } else if (choice === "r" || choice === "resolve") {
+            // Interactive resolution
+            const resolveResult = await resolveConflictsInteractively();
+
+            if (resolveResult.aborted) {
+              // User aborted during resolution - abort the rebase/merge
+              if (strategy === "rebase") {
+                await runCommand(["git", "rebase", "--abort"], { silent: true, ignoreExitCode: true });
+              } else {
+                await runCommand(["git", "merge", "--abort"], { silent: true, ignoreExitCode: true });
+              }
+
+              if (stashResult.stashed) {
+                await this.stashPop(stashResult.stagedFiles);
+                logger.info("Restored local changes");
+              }
+
+              return {
+                success: false,
+                hasConflicts: true,
+                message: "Resolution aborted. Your changes have been restored.",
+              };
+            }
+
+            if (resolveResult.success) {
+              // All conflicts resolved - continue the rebase/merge
+              const stillHasConflicts = await hasUnresolvedConflicts();
+
+              if (!stillHasConflicts) {
+                try {
+                  if (strategy === "rebase") {
+                    await runCommand(["git", "rebase", "--continue"], { silent: true });
+                  } else {
+                    await runCommand(["git", "commit", "--no-edit"], { silent: true });
+                  }
+
+                  // Restore stashed changes
+                  if (stashResult.stashed) {
+                    const popResult = await this.stashPop(stashResult.stagedFiles);
+                    if (popResult.success) {
+                      logger.info("Restored local changes");
+                    }
+                  }
+
+                  return {
+                    success: true,
+                    message: `Conflicts resolved! ${strategy === "rebase" ? "Rebased onto" : "Merged"} origin/${baseBranch}`,
+                  };
+                } catch (continueError) {
+                  // There might be more commits to process in rebase
+                  const moreConflicts = await hasUnresolvedConflicts();
+                  if (moreConflicts) {
+                    console.log(`\n${COLORS.yellow}More conflicts found in subsequent commits${COLORS.reset}`);
+                    // Recursively resolve
+                    return this.syncWithBase(baseBranch, strategy, { interactive: true });
+                  }
+                  throw continueError;
+                }
+              }
+            }
+
+            // Some conflicts skipped - user needs to finish manually
+            if (stashResult.stashed) {
+              console.log(
+                `\n${COLORS.yellow}Note: Your uncommitted changes are stashed. After resolving remaining conflicts:${COLORS.reset}`
+              );
+              console.log(`  1. ${COLORS.cyan}git ${strategy} --continue${COLORS.reset}`);
+              console.log(`  2. ${COLORS.cyan}git stash pop${COLORS.reset}`);
+            }
+
+            return {
+              success: false,
+              hasConflicts: true,
+              message: `Some conflicts need manual resolution. Run 'git ${strategy} --continue' after resolving.`,
+            };
+          } else {
+            // User wants to resolve manually - show help and exit
+            this.showConflictHelp(strategy, baseBranch);
+
+            if (stashResult.stashed) {
+              console.log(
+                `${COLORS.yellow}Note: Your uncommitted changes are stashed. After resolving conflicts, run:${COLORS.reset}`
+              );
+              console.log(`  ${COLORS.cyan}git stash pop${COLORS.reset}`);
+            }
+
+            return {
+              success: false,
+              hasConflicts: true,
+              message: `Conflicts need manual resolution. Run 'git ${strategy} --continue' after resolving.`,
+            };
+          }
         } else {
-          await runCommand(["git", "merge", "--abort"], { silent: true, ignoreExitCode: true });
-        }
+          // Non-interactive: auto-abort
+          if (strategy === "rebase") {
+            await runCommand(["git", "rebase", "--abort"], { silent: true, ignoreExitCode: true });
+          } else {
+            await runCommand(["git", "merge", "--abort"], { silent: true, ignoreExitCode: true });
+          }
 
-        // Restore stashed changes
-        if (stashResult.stashed) {
-          await this.stashPop(stashResult.stagedFiles);
-          logger.info("Restored local changes");
-        }
+          if (stashResult.stashed) {
+            await this.stashPop(stashResult.stagedFiles);
+            logger.info("Restored local changes");
+          }
 
-        return {
-          success: false,
-          message: `Conflicts detected during ${strategy}. Please resolve manually with: git ${strategy} origin/${baseBranch}`,
-        };
+          return {
+            success: false,
+            hasConflicts: true,
+            message: `Conflicts detected during ${strategy}. Please resolve manually with: git ${strategy} origin/${baseBranch}`,
+          };
+        }
       }
 
       // Restore stashed changes on other errors too

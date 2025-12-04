@@ -30,23 +30,79 @@ interface PushCommandArgs {
   noColor?: boolean;
 }
 
-const checkUpstreamStatus = async (currentBranch: string): Promise<boolean> => {
+const checkRemoteBranchExists = async (branch: string): Promise<boolean> => {
+  try {
+    const { exitCode } = await runCommand(
+      ["git", "ls-remote", "--exit-code", "--heads", "origin", branch],
+      { silent: true, ignoreExitCode: true }
+    );
+    return exitCode === 0;
+  } catch {
+    return false;
+  }
+};
+
+interface UpstreamStatus {
+  setUpstream: boolean;
+  remoteBranchDeleted: boolean;
+  isNewBranch: boolean;
+}
+
+const checkUpstreamStatus = async (currentBranch: string, baseBranch: string): Promise<UpstreamStatus> => {
   const upstream = await git.getUpstreamBranch();
+
+  // Fetch to get latest remote state
+  await git.fetch();
 
   if (upstream) {
     const upstreamBranch = upstream.replace(/^origin\//, "");
-    if (upstreamBranch === currentBranch) {
-      return false;
+
+    // Check if the remote branch still exists
+    const remoteExists = await checkRemoteBranchExists(upstreamBranch);
+
+    if (!remoteExists) {
+      // Remote branch was deleted
+      console.log(
+        `${COLORS.yellow}⚠️  Remote branch '${upstreamBranch}' no longer exists (may have been deleted)${COLORS.reset}`
+      );
+
+      // Check if there's a merged PR for this branch
+      try {
+        const { stdout, exitCode } = await runCommand(
+          ["gh", "pr", "list", "--head", upstreamBranch, "--state", "merged", "--json", "number,title", "--limit", "1"],
+          { silent: true, ignoreExitCode: true }
+        );
+        if (exitCode === 0 && stdout.trim() !== "[]") {
+          const prs = JSON.parse(stdout);
+          if (prs.length > 0) {
+            console.log(
+              `${COLORS.cyan}ℹ️  Found merged PR #${prs[0].number}: ${prs[0].title}${COLORS.reset}`
+            );
+            console.log(
+              `${COLORS.yellow}This branch was already merged. Consider switching to ${baseBranch} or creating a new branch.${COLORS.reset}`
+            );
+          }
+        }
+      } catch {
+        // gh CLI not available or failed, continue anyway
+      }
+
+      return { setUpstream: true, remoteBranchDeleted: true, isNewBranch: false };
     }
+
+    if (upstreamBranch === currentBranch) {
+      return { setUpstream: false, remoteBranchDeleted: false, isNewBranch: false };
+    }
+
     console.log(
       `${COLORS.yellow}Upstream branch (${upstreamBranch}) doesn't match current branch (${currentBranch}).${COLORS.reset}`
     );
     console.log(`${COLORS.cyan}Will reset upstream to origin/${currentBranch} on push.${COLORS.reset}`);
-    return true;
+    return { setUpstream: true, remoteBranchDeleted: false, isNewBranch: false };
   }
 
   console.log(`${COLORS.yellow}Branch has no upstream. Will set upstream on push.${COLORS.reset}`);
-  return true;
+  return { setUpstream: true, remoteBranchDeleted: false, isNewBranch: true };
 };
 
 const isWorkingTreeClean = async (): Promise<boolean> => {
@@ -201,10 +257,14 @@ const pushCommand: CommandModule<object, PushCommandArgs> = {
         output.dryRunAction(`Sync with ${baseBranch}`, `strategy: ${syncStrategy}`);
       } else {
         output.info(`Syncing with ${baseBranch} (${syncStrategy})...`);
-        const result = await git.syncWithBase(baseBranch, syncStrategy);
+        const result = await git.syncWithBase(baseBranch, syncStrategy, { interactive: !config.autoYes });
 
         if (result.success) {
           logger.success(result.message);
+        } else if (result.hasConflicts) {
+          // User chose to handle conflicts manually or aborted - exit gracefully
+          logger.warn(result.message);
+          process.exit(1);
         } else {
           logger.error(result.message);
           process.exit(1);
@@ -215,7 +275,40 @@ const pushCommand: CommandModule<object, PushCommandArgs> = {
     const currentBranch = await git.getCurrentBranch();
     console.log(`${COLORS.blue}Current branch: ${COLORS.yellow}${currentBranch}${COLORS.reset}`);
 
-    const setUpstream = await checkUpstreamStatus(currentBranch);
+    const upstreamStatus = await checkUpstreamStatus(currentBranch, mainBranch);
+
+    // Handle deleted remote branch
+    if (upstreamStatus.remoteBranchDeleted && !config.autoYes) {
+      console.log("");
+      console.log(`${COLORS.cyan}Options:${COLORS.reset}`);
+      console.log(`  ${COLORS.green}[p]${COLORS.reset} Push anyway (will create new remote branch and PR)`);
+      console.log(`  ${COLORS.yellow}[s]${COLORS.reset} Switch to ${mainBranch} branch`);
+      console.log(`  ${COLORS.red}[a]${COLORS.reset} Abort`);
+      console.log("");
+
+      const answer = await new Promise<string>((resolve) => {
+        const rl = require("node:readline").createInterface({
+          input: process.stdin,
+          output: process.stdout,
+        });
+        rl.question(`${COLORS.cyan}Your choice [p/s/a]: ${COLORS.reset}`, (ans: string) => {
+          rl.close();
+          resolve(ans.trim().toLowerCase());
+        });
+      });
+
+      if (answer === "s" || answer === "switch") {
+        console.log(`${COLORS.cyan}Switching to ${mainBranch}...${COLORS.reset}`);
+        await runCommand(["git", "checkout", mainBranch], { silent: false });
+        logger.success(`Switched to ${mainBranch}`);
+        process.exit(0);
+      } else if (answer === "a" || answer === "abort") {
+        logger.warn("Aborted by user");
+        process.exit(0);
+      }
+      // Otherwise continue with push
+      console.log(`${COLORS.cyan}Continuing with push...${COLORS.reset}`);
+    }
 
     if (await isWorkingTreeClean()) {
       logger.success("Working tree is clean - nothing to commit");
@@ -272,7 +365,7 @@ const pushCommand: CommandModule<object, PushCommandArgs> = {
     }
 
     if (isDryRun()) {
-      const pushDesc = setUpstream ? "with -u (set upstream)" : "";
+      const pushDesc = upstreamStatus.setUpstream ? "with -u (set upstream)" : "";
       output.dryRunAction(`Push to origin/${currentBranch}`, pushDesc);
 
       if (!config.skipPR) {
@@ -281,7 +374,7 @@ const pushCommand: CommandModule<object, PushCommandArgs> = {
       output.success("Dry run completed successfully!");
     } else {
       try {
-        await performPush(currentBranch, false, setUpstream, config.autoYes);
+        await performPush(currentBranch, false, upstreamStatus.setUpstream, config.autoYes);
 
         if (!config.skipPR) {
           await ensurePR(currentBranch, mainBranch, appConfig.ai.model, config.prDraft, config.autoYes);
