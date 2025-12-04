@@ -273,25 +273,65 @@ export const git = {
 
   /**
    * Stash all changes including untracked files
-   * Returns true if something was stashed
+   * Returns true if something was stashed, and the list of files that were staged
    */
-  async stashChanges(): Promise<boolean> {
+  async stashChanges(): Promise<{ stashed: boolean; stagedFiles: string[] }> {
     const hasChanges = await this.hasAnyChanges();
     if (!hasChanges) {
-      return false;
+      return { stashed: false, stagedFiles: [] };
     }
 
+    // Capture staged files before stashing to restore staging state later
+    const { stdout: stagedFilesOutput } = await runCommand(
+      ["git", "diff", "--name-only", "--cached"],
+      { silent: true }
+    );
+    const stagedFiles = stagedFilesOutput.split("\n").filter(Boolean);
+
     await runCommand(["git", "stash", "push", "-u", "-m", "sg-auto-stash"], { silent: true });
-    return true;
+    return { stashed: true, stagedFiles };
   },
 
   /**
-   * Pop the most recent stash
+   * Pop the most recent stash and restore staging state
+   * @param stagedFiles - List of files that were staged before stashing (for fallback restoration)
    */
-  async stashPop(): Promise<{ success: boolean; message: string }> {
+  async stashPop(stagedFiles: string[] = []): Promise<{ success: boolean; message: string }> {
     try {
-      await runCommand(["git", "stash", "pop"], { silent: true });
-      return { success: true, message: "Changes restored from stash" };
+      // Use --index to restore staging state (works if stash has staged changes)
+      try {
+        await runCommand(["git", "stash", "pop", "--index"], { silent: true });
+        return { success: true, message: "Changes restored from stash" };
+      } catch (indexError) {
+        // If --index fails (e.g., stash doesn't have staged changes), try without --index
+        // and manually restore staging state
+        await runCommand(["git", "stash", "pop"], { silent: true });
+
+        // Restore staging state for files that were originally staged
+        if (stagedFiles.length > 0) {
+          // Check which files still exist and can be staged
+          const existingFiles: string[] = [];
+          for (const file of stagedFiles) {
+            try {
+              const { exitCode } = await runCommand(["git", "ls-files", "--error-unmatch", file], {
+                silent: true,
+                ignoreExitCode: true,
+              });
+              if (exitCode === 0) {
+                existingFiles.push(file);
+              }
+            } catch {
+              // File doesn't exist or isn't tracked, skip it
+            }
+          }
+
+          if (existingFiles.length > 0) {
+            await runCommand(["git", "add", ...existingFiles], { silent: true });
+          }
+        }
+
+        return { success: true, message: "Changes restored from stash" };
+      }
     } catch (error) {
       // Check for conflicts during stash pop
       const { stdout: status } = await runCommand(["git", "status", "--porcelain"], { silent: true });
@@ -327,9 +367,9 @@ export const git = {
       return { success: true, message: "Already on base branch" };
     }
 
-    // Stash any local changes first
-    const hadChanges = await this.stashChanges();
-    if (hadChanges) {
+    // Stash any local changes first (capture staged files to restore later)
+    const stashResult = await this.stashChanges();
+    if (stashResult.stashed) {
       logger.info("Stashed local changes");
     }
 
@@ -343,13 +383,13 @@ export const git = {
         await runCommand(["git", "merge", `origin/${baseBranch}`, "--no-edit"], { silent: true });
       }
 
-      // Restore stashed changes if we had any
-      if (hadChanges) {
-        const stashResult = await this.stashPop();
-        if (!stashResult.success) {
+      // Restore stashed changes if we had any (pass staged files to preserve staging state)
+      if (stashResult.stashed) {
+        const popResult = await this.stashPop(stashResult.stagedFiles);
+        if (!popResult.success) {
           return {
             success: false,
-            message: `${strategy === "rebase" ? "Rebased" : "Merged"} successfully, but ${stashResult.message}`,
+            message: `${strategy === "rebase" ? "Rebased" : "Merged"} successfully, but ${popResult.message}`,
           };
         }
         logger.info("Restored local changes");
@@ -373,8 +413,8 @@ export const git = {
         }
 
         // Restore stashed changes
-        if (hadChanges) {
-          await this.stashPop();
+        if (stashResult.stashed) {
+          await this.stashPop(stashResult.stagedFiles);
           logger.info("Restored local changes");
         }
 
@@ -385,8 +425,8 @@ export const git = {
       }
 
       // Restore stashed changes on other errors too
-      if (hadChanges) {
-        await this.stashPop();
+      if (stashResult.stashed) {
+        await this.stashPop(stashResult.stagedFiles);
       }
 
       return {
