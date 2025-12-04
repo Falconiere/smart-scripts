@@ -201,10 +201,14 @@ const pushCommand: CommandModule<object, PushCommandArgs> = {
         output.dryRunAction(`Sync with ${baseBranch}`, `strategy: ${syncStrategy}`);
       } else {
         output.info(`Syncing with ${baseBranch} (${syncStrategy})...`);
-        const result = await git.syncWithBase(baseBranch, syncStrategy);
+        const result = await git.syncWithBase(baseBranch, syncStrategy, { interactive: !config.autoYes });
 
         if (result.success) {
           logger.success(result.message);
+        } else if (result.hasConflicts) {
+          // User chose to handle conflicts manually or aborted - exit gracefully
+          logger.warn(result.message);
+          process.exit(1);
         } else {
           logger.error(result.message);
           process.exit(1);
