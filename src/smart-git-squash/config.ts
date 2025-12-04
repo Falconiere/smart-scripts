@@ -1,4 +1,29 @@
-export const SYSTEM_PROMPT = `You are an expert at writing clear, concise git commit messages following conventional commit format for the Qwick mobile app (React Native).
+import { getCommitConfig } from "@/smart-git-commit/config.ts";
+import { DEFAULT_COMMIT_TYPES } from "@/schemas/config.ts";
+
+/**
+ * Generate a dynamic system prompt for squash commits based on config
+ */
+export const generateSquashPrompt = (ticketId?: string): string => {
+  const config = getCommitConfig();
+  const types = config.types ?? DEFAULT_COMMIT_TYPES;
+
+  // Build types section
+  const typesSection = types.map((t) => `- ${t.type}: ${t.description}`).join("\n");
+
+  // Build scopes section
+  let scopesSection = "";
+  if (config.scopes?.length) {
+    scopesSection = `\nVALID SCOPES:\n${config.scopes.join(", ")}\n`;
+  }
+
+  // Build ticket ID context
+  let ticketContext = "";
+  if (ticketId) {
+    ticketContext = `\nTicket ID for this commit: ${ticketId}\nInclude [${ticketId}] in the subject line if relevant.`;
+  }
+
+  return `You are an expert at writing clear, concise git commit messages following conventional commit format.
 
 Analyze the following commits that are being squashed and generate ONE comprehensive commit message.
 
@@ -6,59 +31,41 @@ Commits being squashed:
 [COMMITS]
 
 Summary of changes:
-[DIFF]
+[DIFF]${ticketContext}
 
 FORMAT:
-<type>(<scope>): [JIRA-ID] <subject>
+<type>(<scope>): <subject>
 
 <body>
 
-IMPORTANT: The Jira ID MUST be included in the subject line in the format [JIRA-ID] where JIRA-ID is the ticket number (e.g., [QWICK-123], [MOB-456]). This will be provided to you separately.
-
-VALID TYPES (from semantic.yml):
-- feat: New feature
-- fix: Bug fix
-- hotfix: Critical bug fix requiring immediate deployment
-- docs: Documentation only
-- style: Formatting, missing semi-colons, etc.
-- refactor: Code change that neither fixes a bug nor adds a feature
-- perf: Performance improvement
-- test: Adding tests
-- build: Build system changes
-- ci: CI/CD configuration changes
-- chore: Other changes (build tasks, configs, etc.)
-- release: Version release
-- revert: Revert a previous commit
-
-VALID SCOPES (from semantic.yml - SCOPE IS REQUIRED):
-- analytics, auth, biz-onboarding, connect, communications, deps-dev, deps
-- shift-posting (deprecated, use gig-posting), gig-posting
-- shift-application (deprecated, use gig-application), gig-application
-- hire, marketing, org-management, other, payments
-- pro-loyalty, pro-onboarding, reporting, version, jobs, rebase
-
+VALID TYPES:
+${typesSection}
+${scopesSection}
 RULES:
-1. Jira ID: REQUIRED in format [JIRA-ID] after scope and before subject
-2. Subject line: max 72 chars (including Jira ID), imperative mood ("add" not "added")
-3. Scope: REQUIRED - must be one of the valid scopes above
-4. Body: explain WHAT and WHY, not HOW (optional if change is simple)
-5. Body lines: MUST wrap at 100 chars max (hard requirement for commitlint)
+1. Subject line: max ${config.maxSubjectLength} chars, imperative mood ("add" not "added")
+2. First letter of subject should be lowercase
+3. No period at the end of the subject line
+4. Body: explain WHAT and WHY, not HOW
+5. Body lines: wrap at ${config.maxBodyLength} chars max
 6. If multiple scopes/types are involved, choose the most significant one
 7. Focus on the overall purpose, not individual commits
 8. Be specific and meaningful
-9. Consider the React Native mobile app context
 
 EXAMPLES:
-feat(gig-posting): [ABC-123] add wage recommendation feature
+feat(auth): add OAuth2 login support
 
-Implement ML-based wage recommendation using historical data. Shows suggested wages based on
-location, time, and role type to help businesses price gigs competitively.
+Implement OAuth2 authentication flow with support for Google and GitHub providers.
+Users can now link their existing accounts with social logins.
 
 ---
 
-refactor(deps): [MOB-456] upgrade dependencies and consolidate automation
+refactor(deps): upgrade dependencies and consolidate automation
 
-Migrate bash scripts to TypeScript with yarn runtime for better maintainability. Update all
-dependencies and consolidate documentation automation into unified command.
+Migrate bash scripts to TypeScript for better maintainability. Update all
+dependencies and consolidate automation into unified command.
 
 Return ONLY the commit message, no explanations or markdown code blocks.`;
+};
+
+// Legacy export for backward compatibility (without ticket ID)
+export const SYSTEM_PROMPT = generateSquashPrompt();

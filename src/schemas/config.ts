@@ -20,7 +20,6 @@ export const GitConfigSchema = z.object({
     .string()
     .min(1, "Base branch cannot be empty")
     .regex(/^[a-zA-Z0-9_\-/.]+$/, "Invalid branch name format"),
-  requireJiraId: z.boolean().default(true),
   autoSquash: z.boolean().default(false),
   forceWithLease: z.boolean().default(true),
   /** Lint command to run on staged files before commit (set to false to disable) */
@@ -125,7 +124,7 @@ export const CommitConfigSchema = z.object({
   ticketId: z.object({
     /** Enable ticket ID detection from branch name */
     enabled: z.boolean().default(false),
-    /** Regex pattern to match ticket IDs (default: JIRA-style [A-Z]+-[0-9]+) */
+    /** Regex pattern to match ticket IDs (default: [A-Z]+-[0-9]+, e.g., PROJ-123) */
     pattern: z.string().default("[A-Z]{2,10}-\\d+"),
     /** Whether ticket ID is required in commit message */
     required: z.boolean().default(false),
@@ -254,7 +253,6 @@ export const DEFAULT_TRACKING_CONFIG: TrackingConfig = {
 export const DEFAULT_CONFIG: SgConfig = {
   git: {
     baseBranch: "main",
-    requireJiraId: false,
     autoSquash: false,
     forceWithLease: true,
     lintStagedCmd: false,
