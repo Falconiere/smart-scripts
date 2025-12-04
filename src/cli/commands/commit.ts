@@ -5,7 +5,8 @@ import type { CommandModule, ArgumentsCamelCase } from "yargs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { COLORS, getProjectRoot, git, logger } from "@/utils/common.ts";
+import { COLORS, getProjectRoot, git, logger, runCommand } from "@/utils/common.ts";
+import { getConfig } from "@/utils/config.ts";
 import { getModelForComplexity } from "@/utils/openrouter.ts";
 import { isDryRun, output } from "@/utils/output.ts";
 import { generateCommitMessage } from "@/smart-git-commit/generator.ts";
@@ -21,6 +22,48 @@ const autoStageChanges = async (): Promise<void> => {
   output.info("No staged changes found. Auto-staging all changes...");
   await git.stageAll();
   logger.success("Staged all changes");
+};
+
+const runLintOnStagedFiles = async (): Promise<void> => {
+  const config = getConfig();
+  const lintCmd = config.git.lintStagedCmd;
+
+  // Skip linting if disabled or not a valid command string
+  if (!lintCmd || typeof lintCmd !== "string") {
+    return;
+  }
+
+  console.log(`\n${COLORS.cyan}Running lint on staged files...${COLORS.reset}`);
+  try {
+    const { stdout: stagedFiles } = await runCommand(
+      ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+      { silent: true }
+    );
+
+    const filesToCheck = stagedFiles.split("\n").filter(Boolean);
+
+    if (filesToCheck.length > 0) {
+      // Run the configured lint command
+      // The command can use $FILES placeholder for file list
+      const cmdWithFiles = lintCmd.includes("$FILES")
+        ? lintCmd.replace("$FILES", filesToCheck.join(" "))
+        : `${lintCmd} ${filesToCheck.join(" ")}`;
+
+      await runCommand(["sh", "-c", cmdWithFiles], {
+        silent: false,
+        ignoreExitCode: true,
+      });
+
+      // Re-stage files that may have been modified by the linter
+      for (const file of filesToCheck) {
+        await runCommand(["git", "add", file], { silent: true });
+      }
+
+      console.log(`${COLORS.green}✓${COLORS.reset} Lint completed`);
+    }
+  } catch {
+    console.log(`${COLORS.yellow}Lint check had issues, continuing with commit${COLORS.reset}`);
+  }
 };
 
 interface CommitCommandArgs {
@@ -74,6 +117,14 @@ const commitCommand: CommandModule<object, CommitCommandArgs> = {
         logger.success("Nothing to commit - working tree clean");
         process.exit(0);
       }
+    }
+
+    // Run lint on staged files before generating commit message
+    const appConfig = getConfig();
+    if (isDryRun() && appConfig.git.lintStagedCmd) {
+      output.dryRunAction("Run lint on staged files", `cmd: ${appConfig.git.lintStagedCmd}`);
+    } else {
+      await runLintOnStagedFiles();
     }
 
     output.info("Analyzing staged changes...");

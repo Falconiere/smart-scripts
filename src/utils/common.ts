@@ -75,10 +75,19 @@ export const runCommand = async (
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
   return new Promise((resolve, reject) => {
     const [command, ...args] = cmd;
+
+    // Disable git pager for all git commands to prevent vim/less from opening
+    const env = { ...process.env };
+    if (command === "git") {
+      env.GIT_PAGER = "cat";
+      env.GIT_TERMINAL_PROMPT = "0";
+    }
+
     // Always pipe stderr to capture error messages, but only pipe stdout if silent
     const proc = spawn(command, args, {
       cwd: options.cwd ?? getProjectRoot(),
       stdio: options.silent ? ["inherit", "pipe", "pipe"] : ["inherit", "inherit", "pipe"],
+      env,
     });
 
     let stdout = "";

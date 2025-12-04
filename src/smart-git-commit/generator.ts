@@ -45,25 +45,68 @@ export const generateCommitMessage = async (model: string) => {
   const diffStat = await git.getStagedDiffStat();
   const gitStatus = (await runCommand(["git", "status", "--short"], { silent: true })).stdout;
 
-  // Check if diff is too large (approx token count)
+  // Get list of changed files
+  const files = (await runCommand(["git", "diff", "--cached", "--name-only"], { silent: true })).stdout
+    .split("\n")
+    .filter(Boolean);
+
+  // Check if diff is too large (approx token count) - use conservative limit
   const estimatedTokens = diff.length / 4;
-  if (estimatedTokens > 150000) {
-    logger.warn(`⚠️  Large changeset detected (~${Math.round(estimatedTokens)} tokens). Using compact diff format...`);
+  const MAX_TOKENS = 30000; // Conservative limit to leave room for system prompt and response
 
-    // Construct compact diff
-    let compactDiff = `=== CHANGESET SUMMARY ===\n${diffStat}\n\n=== FILE CHANGES (TRUNCATED) ===\n`;
+  if (estimatedTokens > MAX_TOKENS) {
+    const fileCount = files.length;
+    logger.warn(`Large changeset detected (${fileCount} files, ~${Math.round(estimatedTokens).toLocaleString()} tokens)`);
+    logger.info("Using smart diff summarization...");
 
-    const files = (await runCommand(["git", "diff", "--cached", "--name-only"], { silent: true })).stdout
-      .split("\n")
-      .filter(Boolean);
+    // Construct smart compact diff
+    let compactDiff = `=== CHANGESET SUMMARY (${fileCount} files) ===\n${diffStat}\n\n`;
+
+    // Categorize files by type for better context
+    const categories: Record<string, string[]> = {};
+    for (const file of files) {
+      const ext = file.split(".").pop() || "other";
+      if (!categories[ext]) categories[ext] = [];
+      categories[ext].push(file);
+    }
+
+    compactDiff += "=== FILES BY TYPE ===\n";
+    for (const [ext, fileList] of Object.entries(categories)) {
+      compactDiff += `${ext}: ${fileList.length} files\n`;
+    }
+    compactDiff += "\n";
+
+    // Calculate token budget per file
+    const tokenBudgetPerFile = Math.floor((MAX_TOKENS * 4) / Math.max(fileCount, 1));
+    const linesPerFile = Math.max(10, Math.min(50, Math.floor(tokenBudgetPerFile / 100)));
+
+    compactDiff += `=== KEY CHANGES (${linesPerFile} lines per file) ===\n`;
 
     for (const file of files) {
-      const fileDiff = (await runCommand(["git", "diff", "--cached", "--unified=1", "--", file], { silent: true }))
-        .stdout;
-      const truncated = fileDiff.split("\n").slice(0, 50).join("\n");
-      compactDiff += `\n--- ${file} ---\n${truncated}\n... (truncated for brevity)\n\n`;
+      try {
+        const fileDiff = (await runCommand(["git", "diff", "--cached", "--unified=2", "--", file], { silent: true }))
+          .stdout;
+
+        // Get the most important lines: header + first N lines of actual changes
+        const lines = fileDiff.split("\n");
+        const headerLines = lines.filter(l => l.startsWith("@@") || l.startsWith("---") || l.startsWith("+++")).slice(0, 3);
+        const changeLines = lines.filter(l => l.startsWith("+") || l.startsWith("-")).slice(0, linesPerFile);
+
+        if (changeLines.length > 0) {
+          compactDiff += `\n--- ${file} ---\n`;
+          compactDiff += headerLines.join("\n") + "\n";
+          compactDiff += changeLines.join("\n");
+          if (lines.length > headerLines.length + changeLines.length) {
+            compactDiff += `\n... (${lines.length - headerLines.length - changeLines.length} more lines)\n`;
+          }
+        }
+      } catch {
+        compactDiff += `\n--- ${file} --- (could not read diff)\n`;
+      }
     }
+
     diff = compactDiff;
+    console.log(`${COLORS.green}✓${COLORS.reset} Diff compressed to ~${Math.round(diff.length / 4).toLocaleString()} tokens`);
   }
 
   const recentCommits = await git.getRecentCommits();
