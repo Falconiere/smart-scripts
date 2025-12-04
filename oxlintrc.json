@@ -1,0 +1,97 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "import", "promise", "unicorn"],
+  "env": {
+    "node": true,
+    "es2024": true
+  },
+  "globals": {
+    "Bun": "readonly"
+  },
+  "rules": {
+    // TypeScript
+    "typescript/no-explicit-any": "error",
+    "typescript/no-non-null-assertion": "warn",
+    "typescript/prefer-as-const": "error",
+    "typescript/no-unnecessary-type-constraint": "error",
+
+    // Best Practices
+    "eqeqeq": "error",
+    "no-console": "off",
+    "no-debugger": "error",
+    "no-empty": "error",
+    "no-eval": "error",
+    "no-implied-eval": "error",
+    "no-new-func": "error",
+    "no-script-url": "error",
+    "no-void": "error",
+    "no-with": "error",
+    "prefer-const": "error",
+    "no-var": "error",
+    "no-useless-escape": "error",
+    "no-useless-rename": "error",
+    "no-useless-concat": "error",
+
+    // Promises
+    "promise/no-new-statics": "error",
+    "promise/valid-params": "error",
+    "promise/catch-or-return": "warn",
+
+    // Import
+    "import/no-duplicates": "error",
+    "import/no-self-import": "error",
+    "import/no-cycle": "warn",
+    "import/no-default-export": "off",
+
+    // Unicorn
+    "unicorn/no-instanceof-array": "error",
+    "unicorn/no-new-array": "error",
+    "unicorn/no-new-buffer": "error",
+    "unicorn/no-typeof-undefined": "error",
+    "unicorn/prefer-array-flat-map": "error",
+    "unicorn/prefer-array-some": "error",
+    "unicorn/prefer-includes": "error",
+    "unicorn/prefer-string-starts-ends-with": "error",
+    "unicorn/throw-new-error": "error",
+
+    // Error Prevention
+    "no-await-in-loop": "warn",
+    "no-constant-binary-expression": "error",
+    "no-constructor-return": "error",
+    "no-promise-executor-return": "error",
+    "no-self-compare": "error",
+    "no-template-curly-in-string": "warn",
+    "no-unreachable-loop": "error",
+    "require-atomic-updates": "error",
+
+    // Code Quality
+    "default-case-last": "error",
+    "max-params": ["warn", { "max": 4 }],
+    "no-array-constructor": "error",
+    "no-caller": "error",
+    "no-extend-native": "error",
+    "no-extra-bind": "error",
+    "no-iterator": "error",
+    "no-labels": "error",
+    "no-lone-blocks": "error",
+    "no-multi-str": "error",
+    "no-new-wrappers": "error",
+    "no-object-constructor": "error",
+    "no-proto": "error",
+    "no-return-assign": "error",
+    "no-sequences": "error",
+    "no-throw-literal": "error",
+    "no-unneeded-ternary": "error",
+    "no-useless-call": "error",
+    "no-useless-computed-key": "error",
+    "no-useless-constructor": "error",
+    "prefer-exponentiation-operator": "error",
+    "prefer-object-spread": "error",
+    "prefer-rest-params": "error",
+    "prefer-spread": "error",
+    "prefer-template": "error",
+    "radix": "error",
+    "symbol-description": "error"
+  },
+  "ignorePatterns": ["node_modules", "dist", "*.d.ts"]
+}
