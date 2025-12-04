@@ -24,7 +24,7 @@
     "dev": "bun run ./bin/sg.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint",
+    "lint": "oxlint --deny-warnings",
     "lint:fix": "oxlint --fix",
     "check": "bun run typecheck && bun run lint",
     "prepare": "bun run check"
