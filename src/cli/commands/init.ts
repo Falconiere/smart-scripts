@@ -227,10 +227,10 @@ const detectTicketPattern = (prTemplatePath: string): string | null => {
   const root = getProjectRoot();
   try {
     const content = readFileSync(join(root, prTemplatePath), "utf-8");
-    // Look for common patterns like JIRA-123, GOLD-123, etc.
+    // Look for common ticket ID patterns like PROJ-123, ABC-456, etc.
     const patterns = [
-      { regex: /\b([A-Z]{2,10})-\d+/, name: "JIRA-style" },
-      { regex: /\[([A-Z]{2,10})-\d+\]/, name: "JIRA in brackets" },
+      { regex: /\b([A-Z]{2,10})-\d+/, name: "ticket ID" },
+      { regex: /\[([A-Z]{2,10})-\d+\]/, name: "ticket ID in brackets" },
       { regex: /#(\d+)/, name: "GitHub issue" },
     ];
 
@@ -794,7 +794,7 @@ const initCommand: CommandModule<object, InitCommandArgs> = {
               if (!useDetected) {
                 const customPattern = await p.text({
                   message: "Enter ticket ID regex pattern:",
-                  placeholder: "e.g., JIRA-\\d+, PROJ-\\d+",
+                  placeholder: "e.g., PROJ-\\d+, ABC-\\d+",
                   initialValue: "[A-Z]{2,10}-\\d+",
                 });
 
@@ -807,7 +807,7 @@ const initCommand: CommandModule<object, InitCommandArgs> = {
             } else {
               const customPattern = await p.text({
                 message: "Enter ticket ID regex pattern:",
-                placeholder: "e.g., JIRA-\\d+, PROJ-\\d+",
+                placeholder: "e.g., PROJ-\\d+, ABC-\\d+",
                 initialValue: "[A-Z]{2,10}-\\d+",
               });
 

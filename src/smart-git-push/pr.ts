@@ -80,18 +80,18 @@ Generate a PR description following the template structure. Fill in:
 4. Add "Notes for code-reviewer" if there are important implementation details
 5. Add "Notes for QA" with testing instructions
 
-For the PR TITLE, use format: type(scope): [JIRA-ID] description
+For the PR TITLE, use format: type(scope): description
 - Type must be one of the valid types
 - Scope must be one of the valid scopes
-- Include the Jira ID from the branch name
+- If a ticket ID is detected from the branch, include it as [TICKET-ID] in the title
 
 Output ONLY the filled template content, no code blocks or extra formatting.`;
 };
 
 /**
- * Extract Jira ID from branch name
+ * Extract ticket ID from branch name (supports common formats like PROJ-123, ABC-456)
  */
-const extractJiraId = (branchName: string): string | null => {
+const extractTicketId = (branchName: string): string | null => {
   const match = branchName.match(/([A-Z]{2,10}-\d+)/);
   return match ? match[1] : null;
 };
@@ -154,7 +154,7 @@ const getPRDiffSummary = async (baseBranch: string): Promise<string> => {
  * Generate a PR title from commits
  */
 const generatePRTitle = async (branch: string, commits: string): Promise<string> => {
-  const jiraId = extractJiraId(branch);
+  const ticketId = extractTicketId(branch);
   const commitLines = commits.split("\n").filter(Boolean);
 
   // If single commit, use it as title
@@ -172,15 +172,15 @@ const generatePRTitle = async (branch: string, commits: string): Promise<string>
     return featureCommit;
   }
 
-  // Fallback: use branch name with Jira ID
+  // Fallback: use branch name with ticket ID
   const branchDescription = branch
     .replace(/^[^/]+\//, "") // Remove prefix like falco/
-    .replace(/[A-Z]{2,10}-\d+-?/g, "") // Remove Jira ID
+    .replace(/[A-Z]{2,10}-\d+-?/g, "") // Remove ticket ID
     .replace(/-/g, " ")
     .trim();
 
-  if (jiraId && branchDescription) {
-    return `feat: [${jiraId}] ${branchDescription}`;
+  if (ticketId && branchDescription) {
+    return `feat: [${ticketId}] ${branchDescription}`;
   }
 
   return commitLines[0] || `Changes from ${branch}`;
@@ -196,7 +196,7 @@ export const generatePRDescription = async (
 ): Promise<{ title: string; body: string }> => {
   const commits = await getPRCommits(baseBranch);
   const diffSummary = await getPRDiffSummary(baseBranch);
-  const jiraId = extractJiraId(branch);
+  const ticketId = extractTicketId(branch);
 
   // Load project-specific PR template and semantic config
   const [prTemplate, semanticConfig] = await Promise.all([
@@ -206,11 +206,15 @@ export const generatePRDescription = async (
 
   const systemPrompt = createPRSystemPrompt(prTemplate, semanticConfig);
 
+  const ticketContext = ticketId
+    ? `Ticket ID: ${ticketId} (include as [${ticketId}] in the title if relevant)`
+    : "";
+
   const prompt = `Generate a PR description for the following changes:
 
 Branch: ${branch}
 Base branch: ${baseBranch}
-${jiraId ? `Jira ID: ${jiraId}` : "No Jira ID detected - use [JIRA-ID] placeholder"}
+${ticketContext}
 
 Commits included in this PR:
 ${commits}
@@ -218,7 +222,7 @@ ${commits}
 Files changed summary:
 ${diffSummary}
 
-Generate the PR title and description following the template format. The title should follow: type(scope): [${jiraId || "JIRA-ID"}] description`;
+Generate the PR title and description following the template format. The title should follow: type(scope): description`;
 
   logger.info(`📝 Generating PR description with AI (Model: ${model})...`);
 
@@ -249,27 +253,25 @@ Generate the PR title and description following the template format. The title s
     logger.warn("Failed to generate AI description, using default template");
 
     const title = await generatePRTitle(branch, commits);
+    const ticketId = extractTicketId(branch);
     const commitList = commits
       .split("\n")
       .filter(Boolean)
       .map((c) => `- ${c}`)
       .join("\n");
 
-    // Use project template as fallback structure
+    // Use generic fallback structure
+    const ticketLine = ticketId ? `> Ticket: ${ticketId}\n\n` : "";
     const body = `## What is the goal of this PR?
-> Jira Link: ${jiraId || "GOLD-"}
-
-${commitList || "Changes from this branch"}
+${ticketLine}${commitList || "Changes from this branch"}
 
 ## How am I solving the problem?
 > See commits above for detailed changes.
 
-## Things to consider
-
-**General:**
-- [ ] Branch contains work type/Jira tag
-- [ ] PR title matches \`type(scope): [JIRA-ticket] description\` format
-- [ ] Got tests?
+## Checklist
+- [ ] PR title follows \`type(scope): description\` format
+- [ ] Tests added/updated as needed
+- [ ] Documentation updated if required
 
 ## Notes for code-reviewer
 > Review the commits for implementation details.

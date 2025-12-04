@@ -3,37 +3,40 @@
 import { trackFromResponse } from "../smart-token-tracker/index.ts";
 import { COLORS, git, logger } from "../utils/common.ts";
 import { callOpenRouter, createMessage, extractContent } from "../utils/openrouter.ts";
-import { SYSTEM_PROMPT } from "./config.ts";
+import { getCommitConfig } from "@/smart-git-commit/config.ts";
+import { generateSquashPrompt } from "./config.ts";
 import { wrapText } from "./utils.ts";
 
 /**
- * Extract Jira ID from branch name
- * Supports patterns like: feature/QWICK-123-description, bugfix/MOB-456-fix-thing, QWICK-789
+ * Extract ticket ID from branch name (supports common formats like PROJ-123, ABC-456)
  */
-const extractJiraId = (branchName: string): string | null => {
-  // Match common Jira patterns: PROJECT-NUMBER (e.g., QWICK-123, MOB-456)
+const extractTicketId = (branchName: string): string | null => {
   const match = branchName.match(/([A-Z]{2,10}-\d+)/);
   return match ? match[1] : null;
 };
 
 export const generateSquashMessage = async (model: string, commitsText: string, diffText: string): Promise<string> => {
-  // Get current branch and extract Jira ID
-  const currentBranch = await git.getCurrentBranch();
-  const jiraId = extractJiraId(currentBranch);
+  const config = getCommitConfig();
+  const ticketConfig = config.ticketId;
 
-  if (!jiraId) {
-    console.log(`\n${COLORS.yellow}⚠️  Warning: No Jira ID detected in branch name '${currentBranch}'${COLORS.reset}`);
-    console.log(`${COLORS.dim}Expected format: feature/QWICK-123-description${COLORS.reset}`);
-    console.log(`${COLORS.yellow}You will need to manually add [JIRA-ID] to the commit message.${COLORS.reset}\n`);
-  } else {
-    console.log(`${COLORS.green}✓ Detected Jira ID: ${jiraId}${COLORS.reset}\n`);
+  // Get current branch and extract ticket ID if configured
+  const currentBranch = await git.getCurrentBranch();
+  let ticketId: string | undefined;
+
+  if (ticketConfig?.enabled) {
+    ticketId = extractTicketId(currentBranch) ?? undefined;
+
+    if (ticketId) {
+      console.log(`${COLORS.green}✓ Detected ticket ID: ${ticketId}${COLORS.reset}\n`);
+    } else if (ticketConfig.required) {
+      console.log(`\n${COLORS.yellow}⚠️  Warning: No ticket ID detected in branch name '${currentBranch}'${COLORS.reset}`);
+      console.log(`${COLORS.dim}Expected format: feature/PROJ-123-description${COLORS.reset}\n`);
+    }
   }
 
-  const jiraContext = jiraId
-    ? `\nJira ID for this commit: ${jiraId}\nYou MUST include [${jiraId}] in the subject line after the scope.`
-    : `\nNo Jira ID detected. Include [JIRA-ID] placeholder in the subject line.`;
-
-  const prompt = SYSTEM_PROMPT.replace("[COMMITS]", commitsText).replace("[DIFF]", diffText + jiraContext);
+  // Generate dynamic prompt with ticket context
+  const systemPrompt = generateSquashPrompt(ticketId);
+  const prompt = systemPrompt.replace("[COMMITS]", commitsText).replace("[DIFF]", diffText);
 
   logger.info(`📝 Generating commit message with OpenRouter (Model: ${model})...`);
 
@@ -42,34 +45,33 @@ export const generateSquashMessage = async (model: string, commitsText: string, 
       model,
       temperature: 0.3,
       max_tokens: 500,
-      scriptName: "Qwick Squash Message Generator",
+      scriptName: "sg squash",
     });
 
     let message = extractContent(response);
 
-    // Post-process: Wrap body lines at 100 chars
+    // Post-process: Wrap body lines
     const lines = message.split("\n");
     let subject = lines[0];
     const body = lines.slice(1).join("\n");
-    const wrappedBody = wrapText(body, 100);
+    const wrappedBody = wrapText(body, config.maxBodyLength);
 
-    // Validate Jira ID is present
-    if (!subject.match(/\[[A-Z]{2,10}-\d+\]/)) {
-      if (jiraId) {
-        // Try to inject Jira ID if AI didn't include it
-        const typeScope = subject.match(/^([a-z]+\([a-z-]+\):)(.*)$/i);
+    // Validate ticket ID is present if required
+    if (ticketConfig?.enabled && ticketConfig.required && ticketId) {
+      const ticketPattern = new RegExp(`\\[${ticketId}\\]`);
+      if (!subject.match(ticketPattern)) {
+        // Try to inject ticket ID if AI didn't include it
+        const typeScope = subject.match(/^([a-z]+(?:\([a-z-]+\))?:)(.*)$/i);
         if (typeScope) {
-          subject = `${typeScope[1]} [${jiraId}]${typeScope[2]}`;
-          console.log(`${COLORS.yellow}⚠️  Jira ID was missing, automatically added [${jiraId}]${COLORS.reset}`);
+          subject = `${typeScope[1]} [${ticketId}]${typeScope[2]}`;
+          console.log(`${COLORS.yellow}⚠️  Ticket ID was missing, automatically added [${ticketId}]${COLORS.reset}`);
         }
-      } else {
-        console.log(`${COLORS.yellow}⚠️  No Jira ID in commit message. Please add manually.${COLORS.reset}`);
       }
     }
 
     message = `${subject}\n${wrappedBody}`.trim();
 
-    await trackFromResponse("smart-git-squash", response, model);
+    await trackFromResponse("sg squash", response, model);
 
     return message;
   } catch (e) {
