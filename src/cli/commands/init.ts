@@ -268,6 +268,8 @@ interface ConfigOptions {
   cacheEnabled: boolean;
   // Git options
   lintStagedCmd?: string | false;
+  syncStrategy?: "rebase" | "merge" | "none";
+  autoSync?: boolean;
   // Commit options
   useSemanticYaml?: boolean;
   useCommitTemplate?: string;
@@ -310,10 +312,16 @@ ${parts.join("\n")}
     ? "\n  // Note: semantic.yml is auto-detected and loaded automatically"
     : "";
 
-  // Build git section with optional lintStagedCmd
-  const lintLine = options.lintStagedCmd
-    ? `\n    lintStagedCmd: "${options.lintStagedCmd}",`
-    : "";
+  // Build git section with optional settings
+  const gitLines: string[] = [];
+  if (options.lintStagedCmd) {
+    gitLines.push(`    lintStagedCmd: "${options.lintStagedCmd}",`);
+  }
+  if (options.syncStrategy && options.syncStrategy !== "none") {
+    gitLines.push(`    syncStrategy: "${options.syncStrategy}",`);
+    gitLines.push(`    autoSync: ${options.autoSync ?? false},`);
+  }
+  const extraGitLines = gitLines.length > 0 ? `\n${gitLines.join("\n")}` : "";
 
   return `/**
  * sg CLI configuration
@@ -324,7 +332,7 @@ import type { SgConfig } from "smart-scripts";
 export default {
   git: {
     baseBranch: "${options.baseBranch}",
-    forceWithLease: ${options.forceWithLease},${lintLine}
+    forceWithLease: ${options.forceWithLease},${extraGitLines}
   },
   ai: {
     model: "${options.model}",
@@ -462,6 +470,56 @@ const initCommand: CommandModule<object, InitCommandArgs> = {
     if (p.isCancel(forceWithLease)) {
       p.cancel("Setup cancelled.");
       process.exit(0);
+    }
+
+    // Sync strategy selection
+    const syncStrategyChoice = await p.select({
+      message: "How do you want to sync with the base branch?",
+      initialValue: "none" as const,
+      options: [
+        {
+          value: "none" as const,
+          label: "None",
+          hint: "don't automatically sync",
+        },
+        {
+          value: "rebase" as const,
+          label: "Rebase",
+          hint: "rebase onto base branch (cleaner history)",
+        },
+        {
+          value: "merge" as const,
+          label: "Merge",
+          hint: "merge from base branch (preserves history)",
+        },
+      ],
+    });
+
+    if (p.isCancel(syncStrategyChoice)) {
+      p.cancel("Setup cancelled.");
+      process.exit(0);
+    }
+
+    let syncStrategy = syncStrategyChoice as "rebase" | "merge" | "none";
+    let autoSync = false;
+
+    // If a sync strategy is selected, ask about auto-sync
+    if (syncStrategy !== "none") {
+      const autoSyncChoice = await p.confirm({
+        message: `Automatically ${syncStrategy} from ${baseBranch} before commits?`,
+        initialValue: true,
+      });
+
+      if (p.isCancel(autoSyncChoice)) {
+        p.cancel("Setup cancelled.");
+        process.exit(0);
+      }
+
+      autoSync = autoSyncChoice as boolean;
+
+      if (autoSync) {
+        p.log.success(`Will automatically ${syncStrategy} from ${baseBranch} before each commit`);
+      }
     }
 
     const modelChoice = await p.select({
@@ -787,6 +845,8 @@ const initCommand: CommandModule<object, InitCommandArgs> = {
       cacheEnabled: cacheEnabled as boolean,
       colors: colors as boolean,
       lintStagedCmd: lintStagedCmd ?? false,
+      syncStrategy,
+      autoSync,
       useSemanticYaml,
       useCommitTemplate,
       ticketId: ticketIdConfig,
@@ -817,6 +877,12 @@ ${color.dim("Colors:")}         ${config.colors ? "Enabled" : "Disabled"}`;
     // Add lint command to summary
     if (config.lintStagedCmd) {
       summary += `\n${color.dim("Lint Command:")}   ${config.lintStagedCmd}`;
+    }
+
+    // Add sync strategy to summary
+    if (config.syncStrategy && config.syncStrategy !== "none") {
+      const syncMode = config.autoSync ? "Auto" : "Manual";
+      summary += `\n${color.dim("Sync Strategy:")}  ${config.syncStrategy} (${syncMode})`;
     }
 
     // Add commit config to summary

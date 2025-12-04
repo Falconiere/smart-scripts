@@ -237,6 +237,164 @@ export const git = {
       return "";
     }
   },
+
+  /**
+   * Fetch latest changes from remote
+   */
+  async fetch(): Promise<void> {
+    await runCommand(["git", "fetch", "origin"], { silent: true });
+  },
+
+  /**
+   * Check if branch needs to sync with base branch
+   */
+  async needsSync(baseBranch: string): Promise<boolean> {
+    try {
+      await this.fetch();
+      const { stdout } = await runCommand(
+        ["git", "rev-list", "--count", `HEAD..origin/${baseBranch}`],
+        { silent: true }
+      );
+      return parseInt(stdout.trim(), 10) > 0;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Check if working tree has any changes (staged, unstaged, or untracked)
+   */
+  async hasAnyChanges(): Promise<boolean> {
+    const hasStaged = await this.hasStagedChanges();
+    const hasUnstaged = await this.hasUnstagedChanges();
+    const hasUntracked = await this.hasUntrackedFiles();
+    return hasStaged || hasUnstaged || hasUntracked;
+  },
+
+  /**
+   * Stash all changes including untracked files
+   * Returns true if something was stashed
+   */
+  async stashChanges(): Promise<boolean> {
+    const hasChanges = await this.hasAnyChanges();
+    if (!hasChanges) {
+      return false;
+    }
+
+    await runCommand(["git", "stash", "push", "-u", "-m", "sg-auto-stash"], { silent: true });
+    return true;
+  },
+
+  /**
+   * Pop the most recent stash
+   */
+  async stashPop(): Promise<{ success: boolean; message: string }> {
+    try {
+      await runCommand(["git", "stash", "pop"], { silent: true });
+      return { success: true, message: "Changes restored from stash" };
+    } catch (error) {
+      // Check for conflicts during stash pop
+      const { stdout: status } = await runCommand(["git", "status", "--porcelain"], { silent: true });
+      const hasConflicts = status.includes("UU") || status.includes("AA") || status.includes("DD");
+
+      if (hasConflicts) {
+        return {
+          success: false,
+          message: "Conflicts when restoring changes. Your changes are still in stash.",
+        };
+      }
+
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : "Failed to restore stash",
+      };
+    }
+  },
+
+  /**
+   * Sync with base branch using specified strategy
+   * Automatically stashes and restores local changes
+   * Returns true if sync was successful, false if there were conflicts
+   */
+  async syncWithBase(
+    baseBranch: string,
+    strategy: "rebase" | "merge"
+  ): Promise<{ success: boolean; message: string }> {
+    const currentBranch = await this.getCurrentBranch();
+
+    // Don't sync if we're on the base branch
+    if (currentBranch === baseBranch) {
+      return { success: true, message: "Already on base branch" };
+    }
+
+    // Stash any local changes first
+    const hadChanges = await this.stashChanges();
+    if (hadChanges) {
+      logger.info("Stashed local changes");
+    }
+
+    try {
+      // Fetch latest
+      await this.fetch();
+
+      if (strategy === "rebase") {
+        await runCommand(["git", "rebase", `origin/${baseBranch}`], { silent: true });
+      } else {
+        await runCommand(["git", "merge", `origin/${baseBranch}`, "--no-edit"], { silent: true });
+      }
+
+      // Restore stashed changes if we had any
+      if (hadChanges) {
+        const stashResult = await this.stashPop();
+        if (!stashResult.success) {
+          return {
+            success: false,
+            message: `${strategy === "rebase" ? "Rebased" : "Merged"} successfully, but ${stashResult.message}`,
+          };
+        }
+        logger.info("Restored local changes");
+      }
+
+      return {
+        success: true,
+        message: `${strategy === "rebase" ? "Rebased onto" : "Merged"} origin/${baseBranch}`,
+      };
+    } catch (error) {
+      // Check for conflicts
+      const { stdout: status } = await runCommand(["git", "status", "--porcelain"], { silent: true });
+      const hasConflicts = status.includes("UU") || status.includes("AA") || status.includes("DD");
+
+      if (hasConflicts) {
+        // Abort the failed operation
+        if (strategy === "rebase") {
+          await runCommand(["git", "rebase", "--abort"], { silent: true, ignoreExitCode: true });
+        } else {
+          await runCommand(["git", "merge", "--abort"], { silent: true, ignoreExitCode: true });
+        }
+
+        // Restore stashed changes
+        if (hadChanges) {
+          await this.stashPop();
+          logger.info("Restored local changes");
+        }
+
+        return {
+          success: false,
+          message: `Conflicts detected during ${strategy}. Please resolve manually with: git ${strategy} origin/${baseBranch}`,
+        };
+      }
+
+      // Restore stashed changes on other errors too
+      if (hadChanges) {
+        await this.stashPop();
+      }
+
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : "Sync failed",
+      };
+    }
+  },
 };
 
 /**

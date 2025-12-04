@@ -9,6 +9,8 @@ export default {
     baseBranch: "main",
     forceWithLease: true,
     lintStagedCmd: "npx oxlint",
+    syncStrategy: "rebase",
+    autoSync: true,
   },
   ai: {
     model: "anthropic/claude-haiku-4.5",

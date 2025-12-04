@@ -16,6 +16,7 @@ export type {
   TimeEstimates,
   TrackingConfig,
   CommitConfig,
+  MergeStrategy,
 } from "./schemas/config.ts";
 
 // Export default values for reference

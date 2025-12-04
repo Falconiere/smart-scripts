@@ -8,6 +8,11 @@
 import { z } from "zod/v4";
 
 /**
+ * Merge strategy for syncing with base branch
+ */
+export const MergeStrategySchema = z.enum(["rebase", "merge", "none"]).default("none");
+
+/**
  * Git configuration schema
  */
 export const GitConfigSchema = z.object({
@@ -20,6 +25,10 @@ export const GitConfigSchema = z.object({
   forceWithLease: z.boolean().default(true),
   /** Lint command to run on staged files before commit (set to false to disable) */
   lintStagedCmd: z.union([z.string(), z.boolean()]).default(false),
+  /** Strategy for syncing with base branch: "rebase", "merge", or "none" */
+  syncStrategy: MergeStrategySchema,
+  /** Automatically sync with base branch before commit/push */
+  autoSync: z.boolean().default(false),
 });
 
 /**
@@ -164,6 +173,7 @@ export type PricingModel = z.infer<typeof PricingModelSchema>;
 export type TimeEstimates = z.infer<typeof TimeEstimatesSchema>;
 export type TrackingConfig = z.infer<typeof TrackingConfigSchema>;
 export type CommitConfig = z.infer<typeof CommitConfigSchema>;
+export type MergeStrategy = z.infer<typeof MergeStrategySchema>;
 
 /**
  * Default configuration values
@@ -248,6 +258,8 @@ export const DEFAULT_CONFIG: SgConfig = {
     autoSquash: false,
     forceWithLease: true,
     lintStagedCmd: false,
+    syncStrategy: "none",
+    autoSync: false,
   },
   ai: {
     provider: "openrouter",
