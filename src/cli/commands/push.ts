@@ -112,6 +112,25 @@ const isWorkingTreeClean = async (): Promise<boolean> => {
   return !hasUnstaged && !hasUntracked && !hasStaged;
 };
 
+const hasUnpushedCommits = async (): Promise<boolean> => {
+  try {
+    const upstream = await git.getUpstreamBranch();
+    if (!upstream) {
+      // No upstream means all local commits are unpushed
+      const { stdout } = await runCommand(["git", "rev-list", "--count", "HEAD"], { silent: true });
+      return Number.parseInt(stdout.trim(), 10) > 0;
+    }
+    // Check commits ahead of upstream
+    const { stdout } = await runCommand(
+      ["git", "rev-list", "--count", `${upstream}..HEAD`],
+      { silent: true }
+    );
+    return Number.parseInt(stdout.trim(), 10) > 0;
+  } catch {
+    return false;
+  }
+};
+
 const runLintOnStagedFiles = async (): Promise<void> => {
   const config = getConfig();
   const lintCmd = config.git.lintStagedCmd;
@@ -248,30 +267,7 @@ const pushCommand: CommandModule<object, PushCommandArgs> = {
       process.exit(1);
     }
 
-    // Auto-sync with base branch if configured
     const appConfig = getConfig();
-    if (appConfig.git.autoSync && appConfig.git.syncStrategy !== "none") {
-      const { baseBranch, syncStrategy } = appConfig.git;
-
-      if (isDryRun()) {
-        output.dryRunAction(`Sync with ${baseBranch}`, `strategy: ${syncStrategy}`);
-      } else {
-        output.info(`Syncing with ${baseBranch} (${syncStrategy})...`);
-        const result = await git.syncWithBase(baseBranch, syncStrategy, { interactive: !config.autoYes });
-
-        if (result.success) {
-          logger.success(result.message);
-        } else if (result.hasConflicts) {
-          // User chose to handle conflicts manually or aborted - exit gracefully
-          logger.warn(result.message);
-          process.exit(1);
-        } else {
-          logger.error(result.message);
-          process.exit(1);
-        }
-      }
-    }
-
     const currentBranch = await git.getCurrentBranch();
     console.log(`${COLORS.blue}Current branch: ${COLORS.yellow}${currentBranch}${COLORS.reset}`);
 
@@ -310,16 +306,21 @@ const pushCommand: CommandModule<object, PushCommandArgs> = {
       console.log(`${COLORS.cyan}Continuing with push...${COLORS.reset}`);
     }
 
-    if (await isWorkingTreeClean()) {
-      logger.success("Working tree is clean - nothing to commit");
+    const workingTreeClean = await isWorkingTreeClean();
+    const hasCommitsToPush = await hasUnpushedCommits();
+
+    if (workingTreeClean && !hasCommitsToPush) {
+      logger.success("Working tree is clean and no commits to push");
       process.exit(0);
     }
 
-    console.log(`\n${COLORS.yellow}Current status:${COLORS.reset}`);
-    await runCommand(["git", "status", "--short"], { silent: false });
+    if (workingTreeClean && hasCommitsToPush) {
+      console.log(`${COLORS.cyan}Working tree is clean. Proceeding to push existing commits...${COLORS.reset}`);
+    } else {
+      // Handle uncommitted changes
+      console.log(`\n${COLORS.yellow}Current status:${COLORS.reset}`);
+      await runCommand(["git", "status", "--short"], { silent: false });
 
-    // Handle uncommitted changes
-    if (!(await isWorkingTreeClean())) {
       if (isDryRun()) {
         output.dryRunAction("Stage changes", `mode: ${config.stageMode}`);
       } else {

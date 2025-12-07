@@ -77,11 +77,13 @@ export const runCommand = async (
   return new Promise((resolve, reject) => {
     const [command, ...args] = cmd;
 
-    // Disable git pager for all git commands to prevent vim/less from opening
+    // Disable git pager and editor for all git commands to prevent vim/less from opening
     const env = { ...process.env };
     if (command === "git") {
       env.GIT_PAGER = "cat";
       env.GIT_TERMINAL_PROMPT = "0";
+      // Skip editor for commands like rebase --continue to prevent hanging
+      env.GIT_EDITOR = "true";
     }
 
     // Always pipe stderr to capture error messages, but only pipe stdout if silent
@@ -612,16 +614,27 @@ export const git = {
             }
 
             if (resolveResult.success) {
-              // All conflicts resolved - continue the rebase/merge
-              const stillHasConflicts = await hasUnresolvedConflicts();
+              // All conflicts resolved - continue the rebase/merge in a loop
+              // (rebase may have multiple commits with conflicts)
+              let continueLoop = true;
 
-              if (!stillHasConflicts) {
+              while (continueLoop) {
+                const stillHasConflicts = await hasUnresolvedConflicts();
+
+                if (stillHasConflicts) {
+                  // There are still conflicts that weren't resolved
+                  break;
+                }
+
                 try {
                   if (strategy === "rebase") {
                     await runCommand(["git", "rebase", "--continue"], { silent: true });
                   } else {
                     await runCommand(["git", "commit", "--no-edit"], { silent: true });
                   }
+
+                  // Rebase/merge continued successfully - we're done
+                  continueLoop = false;
 
                   // Restore stashed changes
                   if (stashResult.stashed) {
@@ -635,15 +648,43 @@ export const git = {
                     success: true,
                     message: `Conflicts resolved! ${strategy === "rebase" ? "Rebased onto" : "Merged"} origin/${baseBranch}`,
                   };
-                } catch (continueError) {
+                } catch {
                   // There might be more commits to process in rebase
                   const moreConflicts = await hasUnresolvedConflicts();
                   if (moreConflicts) {
                     console.log(`\n${COLORS.yellow}More conflicts found in subsequent commits${COLORS.reset}`);
-                    // Recursively resolve
-                    return this.syncWithBase(baseBranch, strategy, { interactive: true });
+                    // Resolve these conflicts too (don't call syncWithBase - we're already in a rebase)
+                    const nextResolveResult = await resolveConflictsInteractively();
+
+                    if (nextResolveResult.aborted) {
+                      // User aborted during resolution - abort the rebase/merge
+                      if (strategy === "rebase") {
+                        await runCommand(["git", "rebase", "--abort"], { silent: true, ignoreExitCode: true });
+                      } else {
+                        await runCommand(["git", "merge", "--abort"], { silent: true, ignoreExitCode: true });
+                      }
+
+                      if (stashResult.stashed) {
+                        await this.stashPop(stashResult.stagedFiles);
+                        logger.info("Restored local changes");
+                      }
+
+                      return {
+                        success: false,
+                        hasConflicts: true,
+                        message: "Resolution aborted. Your changes have been restored.",
+                      };
+                    }
+
+                    if (!nextResolveResult.success) {
+                      // Some conflicts were skipped - break the loop
+                      continueLoop = false;
+                    }
+                    // Otherwise, continue the loop to process more commits
+                  } else {
+                    // No conflicts but continue failed - something else went wrong
+                    continueLoop = false;
                   }
-                  throw continueError;
                 }
               }
             }

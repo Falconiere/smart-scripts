@@ -4,6 +4,7 @@
 import type { CommandModule, ArgumentsCamelCase } from "yargs";
 
 import { COLORS, confirm, git, logger, runCommand } from "@/utils/common.ts";
+import { getConfig } from "@/utils/config.ts";
 import { handleRebaseFailure } from "@/smart-git-rebase/conflict-handler.ts";
 import { checkBranchExists, fetchTarget, getCommitCounts } from "@/smart-git-rebase/git-helpers.ts";
 import { RebaseArgsSchema } from "@/schemas/cli.ts";
@@ -39,8 +40,7 @@ const rebaseCommand: CommandModule<object, RebaseCommandArgs> = {
       .option("branch", {
         alias: "b",
         type: "string",
-        description: "Target branch to rebase against",
-        default: "main",
+        description: "Target branch to rebase against (default: from config)",
       })
       .option("yes", {
         alias: "y",
@@ -53,7 +53,7 @@ const rebaseCommand: CommandModule<object, RebaseCommandArgs> = {
         description: "Automatically abort on conflict",
         default: false,
       })
-      .example("$0 rebase", "Rebase against main")
+      .example("$0 rebase", "Rebase against base branch from config")
       .example("$0 rebase -b development", "Rebase against development")
       .example("$0 rebase -i", "Interactive rebase")
       .example("$0 rebase -y", "Auto-confirm prompts");
@@ -62,8 +62,9 @@ const rebaseCommand: CommandModule<object, RebaseCommandArgs> = {
     // Validate arguments with Zod
     const args = RebaseArgsSchema.parse(argv);
 
+    const config = getConfig();
     const rebaseMode = args.interactive ? "interactive" : args.onto ? "onto" : "normal";
-    const targetBranch = args.onto ?? args.branch ?? "main";
+    const targetBranch = args.onto ?? args.branch ?? config.git.baseBranch;
     const autoYes = args.yes;
     const abortOnConflict = args.abortOnConflict;
 

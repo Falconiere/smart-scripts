@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bun install:*)",
+      "Bash(bun run:*)",
+      "Bash(bun link:*)",
+      "Bash(sg --help:*)",
+      "Bash(npm link:*)",
+      "Bash(grep:*)",
+      "Bash(cat:*)",
+      "Bash(sg init:*)",
+      "Bash(bun add:*)",
+      "WebSearch",
+      "WebFetch(domain:openrouter.ai)",
+      "Bash(bun -e:*)",
+      "Bash(/Users/falconiere/Projects/smart-scripts/bin/sg.ts commit:*)",
+      "Bash(/Users/falconiere/Projects/smart-scripts/bin/sg.ts init:*)",
+      "Bash(find:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

@@ -107,26 +107,6 @@ const commitCommand: CommandModule<object, CommitCommandArgs> = {
       process.exit(1);
     }
 
-    // Auto-sync with base branch if configured
-    const appConfig = getConfig();
-    if (appConfig.git.autoSync && appConfig.git.syncStrategy !== "none") {
-      const { baseBranch, syncStrategy } = appConfig.git;
-
-      if (isDryRun()) {
-        output.dryRunAction(`Sync with ${baseBranch}`, `strategy: ${syncStrategy}`);
-      } else {
-        output.info(`Syncing with ${baseBranch} (${syncStrategy})...`);
-        const result = await git.syncWithBase(baseBranch, syncStrategy);
-
-        if (result.success) {
-          logger.success(result.message);
-        } else {
-          logger.error(result.message);
-          process.exit(1);
-        }
-      }
-    }
-
     // Auto-stage if no staged changes but there are unstaged changes
     if (!(await git.hasStagedChanges())) {
       if (await hasAnyChanges()) {
@@ -142,6 +122,7 @@ const commitCommand: CommandModule<object, CommitCommandArgs> = {
     }
 
     // Run lint on staged files before generating commit message
+    const appConfig = getConfig();
     if (isDryRun() && appConfig.git.lintStagedCmd) {
       output.dryRunAction("Run lint on staged files", `cmd: ${appConfig.git.lintStagedCmd}`);
     } else {
